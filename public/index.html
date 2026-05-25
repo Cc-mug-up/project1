@@ -1,0 +1,400 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>寝室智控中心 v1.2</title>
+<style>
+/* ═══════════════════════════════════════════════════════
+   CYBERPUNK DASHBOARD — 寝室智控中心 v1.2
+   ═══════════════════════════════════════════════════════ */
+:root {
+  --bg:#06060e; --bg-card:#0c0c1a; --border:#181830;
+  --neon:#00bbff; --neon-dim:rgba(0,187,255,.14); --neon-glow:0 0 20px rgba(0,187,255,.3);
+  --gold:#e2a840; --gold-dim:rgba(226,168,64,.16);
+  --text:#bcc4d0; --text-dim:#5a6a7e; --text-bright:#e8ecf2;
+  --danger:#ff4470; --input-bg:#0a0a1a; --input-bd:#1e1e3a;
+  --radius:14px; --radius-sm:8px;
+  --font:system-ui,-apple-system,"Segoe UI",Roboto,"Noto Sans SC",sans-serif;
+  --font-mono:"Cascadia Code","Fira Code",Consolas,monospace;
+}
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+html{font-size:15px}
+body{
+  background:var(--bg); color:var(--text); font-family:var(--font);
+  min-height:100vh; padding:14px;
+  background-image:
+    radial-gradient(ellipse at 50% 0%, rgba(0,187,255,.05) 0%, transparent 70%),
+    radial-gradient(ellipse at 100% 100%, rgba(226,168,64,.03) 0%, transparent 60%);
+  -webkit-tap-highlight-color:transparent;
+}
+body::after{content:"";position:fixed;inset:0;pointer-events:none;z-index:9999;
+  background:repeating-linear-gradient(0deg,transparent,transparent 2px,rgba(0,0,0,.012) 2px,rgba(0,0,0,.012) 4px);}
+
+/* ── Banner ──────────────────────────────────── */
+.banner{
+  display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;
+  background:linear-gradient(135deg,rgba(0,187,255,.08),rgba(0,187,255,.02),rgba(226,168,64,.04));
+  border:1px solid var(--border);border-radius:var(--radius);padding:12px 18px;margin-bottom:20px;
+  position:relative;overflow:hidden;
+}
+.banner::before{content:"";position:absolute;top:0;left:0;right:0;height:1px;
+  background:linear-gradient(90deg,transparent,var(--neon),transparent);opacity:.5;}
+.banner-left{display:flex;align-items:center;gap:10px}
+.banner-dot{width:8px;height:8px;border-radius:50%;background:var(--neon);box-shadow:0 0 8px var(--neon);animation:pulse 2s infinite}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.4}}
+.banner h1{font-size:1.1rem;font-weight:700;color:var(--text-bright);letter-spacing:.04em}
+.banner-ver{font-size:.65rem;color:var(--gold);background:var(--gold-dim);padding:2px 8px;border-radius:10px;font-family:var(--font-mono)}
+.banner-right{display:flex;align-items:center;gap:10px}
+.banner-lan{font-size:.74rem;color:var(--text-dim);font-family:var(--font-mono);background:rgba(0,0,0,.3);padding:5px 10px;border-radius:6px;border:1px solid var(--border)}
+.banner-qr-btn{background:var(--neon-dim);color:var(--neon);border:1px solid rgba(0,187,255,.25);padding:5px 12px;border-radius:6px;cursor:pointer;font-size:.74rem;font-family:var(--font);transition:all .2s}
+.banner-qr-btn:hover{background:rgba(0,187,255,.25);box-shadow:var(--neon-glow)}
+
+/* ── Dashboard Grid ──────────────────────────── */
+.dashboard{
+  display:grid;grid-template-columns:1fr 1fr;gap:14px;
+  max-width:560px;margin:0 auto;
+}
+.dash-card{
+  background:var(--bg-card);border:1px solid var(--border);border-radius:var(--radius);
+  padding:28px 18px;text-align:center;cursor:pointer;transition:all .25s;
+  display:flex;flex-direction:column;align-items:center;gap:10px;
+  animation:fadeUp .45s ease both;position:relative;overflow:hidden;
+}
+.dash-card::after{content:"";position:absolute;inset:0;border-radius:var(--radius);
+  background:radial-gradient(circle at 50% 0%,rgba(0,187,255,.06),transparent 70%);opacity:0;transition:opacity .25s;}
+.dash-card:hover{border-color:var(--neon);box-shadow:0 0 24px rgba(0,187,255,.12);transform:translateY(-2px)}
+.dash-card:hover::after{opacity:1}
+.dash-card:nth-child(1){animation-delay:.05s}
+.dash-card:nth-child(2){animation-delay:.12s}
+.dash-card:nth-child(3){animation-delay:.19s}
+.dash-card:nth-child(4){animation-delay:.26s}
+.dash-icon{font-size:2.4rem;line-height:1}
+.dash-title{font-size:.95rem;font-weight:700;color:var(--text-bright);letter-spacing:.02em}
+.dash-desc{font-size:.72rem;color:var(--text-dim);line-height:1.4}
+
+/* ── Dialog Overlay ──────────────────────────── */
+.dialog-overlay{
+  position:fixed;inset:0;background:rgba(2,2,10,.92);z-index:100;
+  display:flex;align-items:center;justify-content:center;
+  opacity:0;pointer-events:none;transition:opacity .3s;
+  backdrop-filter:blur(6px);-webkit-backdrop-filter:blur(6px);
+}
+.dialog-overlay.open{opacity:1;pointer-events:auto}
+.dialog-panel{
+  background:var(--bg-card);border:1px solid var(--border);border-radius:var(--radius);
+  width:min(680px,96vw);max-height:92vh;display:flex;flex-direction:column;
+  transform:translateY(20px) scale(.97);transition:transform .3s;
+  box-shadow:0 0 60px rgba(0,0,0,.6);
+}
+.dialog-overlay.open .dialog-panel{transform:translateY(0) scale(1)}
+.dialog-bar{
+  display:flex;align-items:center;gap:12px;padding:14px 18px;
+  border-bottom:1px solid var(--border);flex-shrink:0;
+}
+.dialog-back{
+  background:var(--neon-dim);color:var(--neon);border:1px solid rgba(0,187,255,.2);
+  padding:6px 14px;border-radius:6px;cursor:pointer;font-size:.78rem;font-family:var(--font);
+  transition:all .2s;white-space:nowrap;
+}
+.dialog-back:hover{background:var(--neon);color:#000}
+.dialog-bar-title{font-size:.9rem;font-weight:700;color:var(--text-bright)}
+.dialog-body{flex:1;overflow-y:auto;padding:16px 18px 24px;scrollbar-width:thin;scrollbar-color:#222 transparent}
+
+/* ── QR Modal ────────────────────────────────── */
+.qr-overlay{position:fixed;inset:0;background:rgba(0,0,0,.7);display:flex;align-items:center;justify-content:center;z-index:10000}
+.qr-box{background:var(--bg-card);border:1px solid var(--border);border-radius:var(--radius);padding:24px;text-align:center;max-width:300px;width:90%}
+.qr-box p{color:var(--text-dim);margin:10px 0;font-size:.8rem}
+.qr-box img{width:200px;height:200px;border-radius:8px}
+.qr-box .qr-url{font-size:.7rem;color:var(--text-dim);font-family:var(--font-mono);word-break:break-all}
+.qr-close{float:right;font-size:1.3rem;cursor:pointer;color:var(--text-dim);line-height:1}
+.qr-close:hover{color:var(--text)}
+
+/* ── Shared UI (Buttons, Forms, Lists) ───────── */
+.btn{padding:10px 16px;border-radius:var(--radius-sm);font-size:.82rem;font-family:var(--font);cursor:pointer;border:1px solid var(--input-bd);background:var(--input-bg);color:var(--text);transition:all .2s;text-align:center;white-space:nowrap}
+.btn:hover{background:#141428}
+.btn-pri{background:var(--neon);color:#000;border-color:var(--neon);font-weight:600}
+.btn-pri:hover{background:#00ccff;box-shadow:var(--neon-glow)}
+.btn-gold{background:transparent;color:var(--gold);border-color:var(--gold);font-weight:600}
+.btn-gold:hover{background:var(--gold-dim);box-shadow:0 0 14px rgba(226,168,64,.2)}
+.btn-sm{padding:5px 10px;font-size:.72rem}
+.btn-dl{color:var(--neon);border-color:rgba(0,187,255,.3)}.btn-dl:hover{background:var(--neon-dim)}
+
+.form-row{display:flex;gap:8px;margin-bottom:8px}
+.form-group{flex:1}
+.form-group label{display:block;font-size:.7rem;color:var(--text-dim);margin-bottom:3px;text-transform:uppercase;letter-spacing:.05em}
+.form-group input,.form-group select{width:100%;padding:9px 10px;background:var(--input-bg);border:1px solid var(--input-bd);border-radius:6px;color:var(--text);font-size:.82rem;font-family:var(--font);transition:border-color .2s}
+.form-group input:focus,.form-group select:focus{outline:none;border-color:var(--neon)}
+
+.card-header{display:flex;align-items:center;gap:8px;margin-bottom:12px;padding-bottom:10px;border-bottom:1px solid var(--border)}
+.card-icon{font-size:1.1rem}
+.card-title{font-size:.9rem;font-weight:700;color:var(--text-bright)}
+.card-badge{font-size:.65rem;color:var(--neon);background:var(--neon-dim);padding:2px 8px;border-radius:8px;font-family:var(--font-mono)}
+
+.clip-status-row{display:flex;align-items:center;gap:6px;margin-bottom:8px;font-size:.72rem;color:var(--text-dim)}
+.clip-status-row .dot{width:7px;height:7px;border-radius:50%;background:#444;flex-shrink:0}
+.clip-status-row .dot.live{background:var(--neon);box-shadow:0 0 6px var(--neon)}
+.clip-textarea{width:100%;min-height:200px;resize:vertical;background:var(--input-bg);border:1px solid var(--input-bd);border-radius:var(--radius-sm);color:var(--text);padding:12px;font-family:var(--font-mono);font-size:.82rem;line-height:1.5;transition:border-color .2s}
+.clip-textarea:focus{outline:none;border-color:var(--neon);box-shadow:0 0 10px rgba(0,187,255,.1)}
+.clip-btns{display:flex;gap:8px;margin-top:10px}
+.clip-btns button{flex:1}
+
+.balance-row{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:10px}
+.balance-chip{flex:1;min-width:80px;text-align:center;padding:10px 6px;border-radius:8px;background:rgba(255,255,255,.02);border:1px solid var(--border)}
+.balance-chip .name{font-size:.78rem;font-weight:600;color:var(--text-bright)}
+.balance-chip .paid{font-size:.68rem;color:var(--text-dim);margin:2px 0}
+.balance-chip .net{font-size:.85rem;font-weight:700;font-family:var(--font-mono)}
+.balance-chip .net.pos{color:var(--gold)}
+.balance-chip .net.neg{color:var(--danger)}
+.settlement-hint{font-size:.72rem;color:var(--text-dim);margin-bottom:6px}
+.settlement-item{padding:6px 10px;border-left:2px solid var(--gold);margin-bottom:3px;font-size:.78rem;background:var(--gold-dim);border-radius:0 6px 6px 0}
+
+.list-wrap{max-height:260px;overflow-y:auto;scrollbar-width:thin;scrollbar-color:#222 transparent}
+.list-item{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:9px 0;border-bottom:1px solid rgba(255,255,255,.03)}
+.list-item:last-child{border-bottom:none}
+.list-item .info{flex:1;min-width:0}
+.list-item .info .top{display:flex;align-items:center;gap:6px;margin-bottom:2px}
+.list-item .info .desc{font-size:.8rem;color:var(--text)}
+.list-item .info .tag{font-size:.62rem;padding:1px 6px;border-radius:4px;background:var(--neon-dim);color:var(--neon);white-space:nowrap}
+.list-item .info .meta{font-size:.7rem;color:var(--text-dim)}
+.list-item .amount{font-weight:700;font-size:.9rem;font-family:var(--font-mono);white-space:nowrap}
+.list-item .amount.gold{color:var(--gold)}
+.list-del{background:none;border:none;color:#444;cursor:pointer;font-size:1.1rem;padding:2px 6px;transition:color .15s;line-height:1}
+.list-del:hover{color:var(--danger)}
+.empty-state{text-align:center;color:var(--text-dim);padding:24px 0;font-size:.8rem}
+
+.msg-item{padding:10px 0;border-bottom:1px solid rgba(255,255,255,.03)}
+.msg-item:last-child{border-bottom:none}
+.msg-header{display:flex;align-items:center;gap:6px;margin-bottom:4px}
+.msg-author{font-size:.78rem;font-weight:600;color:var(--neon)}
+.msg-time{font-size:.66rem;color:var(--text-dim);font-family:var(--font-mono)}
+.msg-body{font-size:.8rem;color:var(--text);line-height:1.45;word-break:break-word}
+.msg-del{float:right;background:none;border:none;color:#333;cursor:pointer;font-size:.9rem;padding:0 4px}
+.msg-del:hover{color:var(--danger)}
+
+.file-upload-zone{border:2px dashed var(--border);border-radius:var(--radius-sm);padding:16px;text-align:center;cursor:pointer;transition:all .2s;margin-bottom:10px}
+.file-upload-zone:hover,.file-upload-zone.dragover{border-color:var(--neon);background:var(--neon-dim)}
+.file-upload-zone .icon{font-size:1.4rem;margin-bottom:2px}
+.file-upload-zone .hint{font-size:.72rem;color:var(--text-dim)}
+.file-progress,.file-dl-progress{padding:8px 10px;margin:6px 0;border-radius:6px;background:var(--neon-dim);border:1px solid rgba(0,187,255,.2);display:none;font-size:.72rem}
+.file-progress .dl-label,.file-dl-progress .dl-label{display:flex;justify-content:space-between;margin-bottom:4px}
+.file-progress .dl-name,.file-dl-progress .dl-name{color:var(--neon);max-width:70%;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.file-progress .dl-pct,.file-dl-progress .dl-pct{color:var(--text-bright);font-family:var(--font-mono)}
+.file-progress .dl-bar-wrap,.file-dl-progress .dl-bar-wrap{height:4px;background:rgba(0,0,0,.3);border-radius:2px;overflow:hidden}
+.file-progress .dl-bar{height:100%;background:var(--neon);transition:width .15s;border-radius:2px}
+.file-dl-progress .dl-bar{height:100%;background:var(--gold);transition:width .15s;border-radius:2px}
+.file-item{display:flex;align-items:center;gap:8px;padding:8px 0;border-bottom:1px solid rgba(255,255,255,.03)}
+.file-item:last-child{border-bottom:none}
+.file-icon{font-size:1.2rem;flex-shrink:0}
+.file-info{flex:1;min-width:0}
+.file-info .fname{font-size:.78rem;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.file-info .fmeta{font-size:.66rem;color:var(--text-dim);font-family:var(--font-mono);margin-top:1px}
+.file-actions{display:flex;gap:4px;flex-shrink:0}
+.file-actions button{padding:4px 10px;font-size:.68rem}
+
+/* ── Responsive ──────────────────────────────── */
+@media (max-width:500px){
+  .dashboard{grid-template-columns:1fr;max-width:340px}
+  .dash-card{padding:22px 14px}
+  .dash-icon{font-size:2rem}
+  .dialog-panel{width:100vw;max-height:100vh;border-radius:0}
+  .dialog-bar{padding:12px 14px}
+  .dialog-body{padding:12px 14px 20px}
+  .form-row{flex-direction:column}
+  .clip-btns{flex-direction:column}
+  .clip-textarea{min-height:140px}
+  html{font-size:14px}
+  body{padding:8px}
+  .banner{flex-direction:column;align-items:flex-start}
+}
+
+@keyframes fadeUp{from{opacity:0;transform:translateY(12px)}to{opacity:1;transform:translateY(0)}}
+</style>
+</head>
+<body>
+
+<!-- ═══ Banner ═══ -->
+<header class="banner">
+  <div class="banner-left">
+    <span class="banner-dot"></span>
+    <h1>寝室智控中心</h1>
+    <span class="banner-ver">v1.2</span>
+  </div>
+  <div class="banner-right">
+    <span class="banner-lan" id="banner-ip">⏳ 检测中…</span>
+    <button class="banner-qr-btn" id="banner-qr-btn">📱 扫码</button>
+  </div>
+</header>
+
+<!-- ═══ QR Modal ═══ -->
+<div class="qr-overlay" id="qr-overlay" style="display:none">
+  <div class="qr-box">
+    <span class="qr-close" id="qr-close">&times;</span>
+    <p style="color:var(--text-bright);font-weight:600">手机扫码连接</p>
+    <img id="qr-img" src="" alt="QR Code">
+    <p class="qr-url" id="qr-url-text"></p>
+  </div>
+</div>
+
+<!-- ═══ Dashboard ═══ -->
+<main class="dashboard" id="dashboard">
+  <div class="dash-card" data-dialog="clipboard">
+    <span class="dash-icon">📋</span>
+    <span class="dash-title">共享剪贴板</span>
+    <span class="dash-desc">电脑手机互传文字</span>
+  </div>
+  <div class="dash-card" data-dialog="billing">
+    <span class="dash-icon">💰</span>
+    <span class="dash-title">AA 记账系统</span>
+    <span class="dash-desc">寝室账单 & 自动结算</span>
+  </div>
+  <div class="dash-card" data-dialog="messages">
+    <span class="dash-icon">💬</span>
+    <span class="dash-title">留言板</span>
+    <span class="dash-desc">局域网实时聊天</span>
+  </div>
+  <div class="dash-card" data-dialog="files">
+    <span class="dash-icon">📁</span>
+    <span class="dash-title">文件闪传</span>
+    <span class="dash-desc">满速上传下载共享</span>
+  </div>
+</main>
+
+<!-- ══════════════════════════════════════════════
+  DIALOGS
+  ═══════════════════════════════════════════════ -->
+
+<!-- 📋 共享剪贴板 -->
+<div class="dialog-overlay" id="dialog-clipboard">
+  <div class="dialog-panel">
+    <div class="dialog-bar">
+      <button class="dialog-back" data-close="clipboard">← 返回</button>
+      <span class="dialog-bar-title">📋 共享剪贴板</span>
+      <span class="card-badge" id="clip-badge" style="margin-left:auto">SYNC</span>
+    </div>
+    <div class="dialog-body">
+      <div class="clip-status-row">
+        <span class="dot" id="clip-dot"></span>
+        <span id="clip-time">等待连接…</span>
+      </div>
+      <textarea class="clip-textarea" id="clipboard-text" placeholder="输入内容，或从其他设备推送…"></textarea>
+      <div class="clip-btns">
+        <button class="btn btn-pri" id="btn-push">📤 推送</button>
+        <button class="btn" id="btn-copy">📋 复制到本地</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- 💰 AA 记账 -->
+<div class="dialog-overlay" id="dialog-billing">
+  <div class="dialog-panel">
+    <div class="dialog-bar">
+      <button class="dialog-back" data-close="billing">← 返回</button>
+      <span class="dialog-bar-title">💰 AA 记账系统</span>
+    </div>
+    <div class="dialog-body">
+      <form id="expense-form">
+        <div class="form-row">
+          <div class="form-group">
+            <label>金额 ¥</label>
+            <input type="number" id="exp-amount" step="0.01" min="0.01" placeholder="0.00" required>
+          </div>
+          <div class="form-group">
+            <label>付款人</label>
+            <input type="text" id="exp-payer" placeholder="小明" list="member-list" required>
+            <datalist id="member-list"></datalist>
+          </div>
+        </div>
+        <div class="form-row">
+          <div class="form-group">
+            <label>分类</label>
+            <select id="exp-category">
+              <option value="饮食">🍜 饮食</option><option value="水电">💡 水电</option>
+              <option value="日用品">🧴 日用品</option><option value="房租">🏠 房租</option>
+              <option value="其他">📦 其他</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label>备注</label>
+            <input type="text" id="exp-desc" placeholder="选填">
+          </div>
+        </div>
+        <button type="submit" class="btn btn-pri" style="width:100%">✓ 记一笔</button>
+      </form>
+      <div style="margin-top:14px">
+        <div class="balance-row" id="balance-summary"></div>
+        <div id="settlement-list"></div>
+      </div>
+      <div class="list-wrap" id="expense-list-wrap">
+        <div id="expense-list"></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- 💬 留言板 -->
+<div class="dialog-overlay" id="dialog-messages">
+  <div class="dialog-panel">
+    <div class="dialog-bar">
+      <button class="dialog-back" data-close="messages">← 返回</button>
+      <span class="dialog-bar-title">💬 留言板</span>
+      <span class="card-badge" id="msg-badge" style="margin-left:auto">LIVE</span>
+    </div>
+    <div class="dialog-body">
+      <form id="msg-form">
+        <div class="form-group" style="margin-bottom:8px">
+          <label>昵称</label>
+          <input type="text" id="msg-author" placeholder="你的名字" required maxlength="12">
+        </div>
+        <div class="form-group" style="margin-bottom:8px">
+          <label>内容</label>
+          <input type="text" id="msg-content" placeholder="说点什么…" required maxlength="300">
+        </div>
+        <button type="submit" class="btn btn-gold" style="width:100%">💬 发送</button>
+      </form>
+      <div class="list-wrap" id="msg-list-wrap" style="margin-top:12px;max-height:320px">
+        <div id="msg-list"></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- 📁 文件闪传 -->
+<div class="dialog-overlay" id="dialog-files">
+  <div class="dialog-panel">
+    <div class="dialog-bar">
+      <button class="dialog-back" data-close="files">← 返回</button>
+      <span class="dialog-bar-title">📁 局域网文件闪传</span>
+      <span class="card-badge" id="file-badge" style="margin-left:auto">LAN</span>
+    </div>
+    <div class="dialog-body">
+      <div class="file-upload-zone" id="file-zone">
+        <div class="icon">📤</div>
+        <div class="hint">点击选择文件或拖拽到此处</div>
+        <input type="file" id="file-input" style="display:none" multiple>
+      </div>
+      <div class="file-progress" id="file-progress">
+        <div class="dl-label">
+          <span class="dl-name" id="up-name">—</span>
+          <span class="dl-pct" id="up-pct">0%</span>
+        </div>
+        <div class="dl-bar-wrap"><div class="dl-bar" id="file-progress-bar" style="width:0%"></div></div>
+      </div>
+      <div class="file-dl-progress" id="file-dl-progress">
+        <div class="dl-label">
+          <span class="dl-name" id="dl-name">—</span>
+          <span class="dl-pct" id="dl-pct">0%</span>
+        </div>
+        <div class="dl-bar-wrap"><div class="dl-bar" id="dl-bar" style="width:0%"></div></div>
+      </div>
+      <div class="list-wrap" id="file-list-wrap" style="max-height:280px">
+        <div id="file-list"></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script src="app.js"></script>
+</body>
+</html>

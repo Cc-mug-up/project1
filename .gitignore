@@ -1,7 +1,7 @@
-# 忽略所有编译生成的二进制执行文件
+node_modules/
+data/
+.vscode/
 *.exe
-
-# 忽略 Keil 编译单片机时产生的庞大垃圾文件
 *.o
 *.d
 *.crf
@@ -9,6 +9,3 @@
 *.lnp
 /Objects/
 /Listings/
-
-# 忽略 VS Code 自动生成的本地配置和缓存文件夹
-.vscode/
