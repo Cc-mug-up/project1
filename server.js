@@ -1,10 +1,14 @@
 const express = require('express');
+const http = require('http');
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
 const multer = require('multer');
+const { Server } = require('socket.io');
 
 const app = express();
+const server = http.createServer(app);
+const io = new Server(server);
 const PORT = 3000;
 
 app.use(express.json());
@@ -230,6 +234,65 @@ app.delete('/api/messages/:id', (req, res) => {
   res.json({ ok: true });
 });
 
+// ── Socket.io 实时通信 ──────────────────────────────────
+io.on('connection', (socket) => {
+  const ip = socket.handshake.address;
+  console.log(`[WS] 设备接入: ${ip}`);
+
+  // 剪贴板：推送更新
+  socket.on('clipboard:push', ({ content }) => {
+    if (typeof content !== 'string') return;
+    const data = { content, updatedAt: new Date().toISOString() };
+    writeJSON(CLIPBOARD_FILE, data);
+    // 广播给所有其他设备
+    socket.broadcast.emit('clipboard:update', data);
+  });
+
+  // 剪贴板：拉取当前内容
+  socket.on('clipboard:pull', () => {
+    const data = readJSON(CLIPBOARD_FILE, { content: '', updatedAt: null });
+    socket.emit('clipboard:update', data);
+  });
+
+  // 留言板：发送消息
+  socket.on('message:send', ({ author, content }) => {
+    if (!author || !content) return;
+    const msg = {
+      id: Date.now().toString(36) + Math.random().toString(36).slice(2, 6),
+      author: author.trim(),
+      content: content.trim(),
+      date: new Date().toISOString()
+    };
+    const list = getMessages();
+    list.unshift(msg);
+    if (list.length > 200) list.length = 200;
+    saveMessages(list);
+    // 广播给所有设备（含发送者自己）
+    io.emit('message:new', msg);
+    io.emit('message:count', list.length);
+  });
+
+  // 留言板：删除消息
+  socket.on('message:delete', ({ id }) => {
+    const list = getMessages();
+    const idx = list.findIndex(m => m.id === id);
+    if (idx === -1) return;
+    list.splice(idx, 1);
+    saveMessages(list);
+    io.emit('message:removed', { id });
+    io.emit('message:count', list.length);
+  });
+
+  // 留言板：拉取全部
+  socket.on('messages:get', () => {
+    socket.emit('messages:all', getMessages());
+  });
+
+  socket.on('disconnect', () => {
+    console.log(`[WS] 设备断开: ${ip}`);
+  });
+});
+
 // ── 服务器信息 ──────────────────────────────────────────
 app.get('/api/server-info', (_req, res) => {
   res.json({ ips: getLocalIPs(), port: PORT });
@@ -262,8 +325,8 @@ function getLocalIPs() {
   return ips;
 }
 
-const server = app.listen(PORT, '0.0.0.0', () => {
-  server.timeout = 0; // 大文件上传下载不限时
+server.timeout = 0; // 大文件上传下载不限时
+server.listen(PORT, '0.0.0.0', () => {
   const ips = getLocalIPs();
   console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
   console.log('  局域网共享剪贴板 & 寝室记账看板');

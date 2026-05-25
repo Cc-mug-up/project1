@@ -1,5 +1,5 @@
 // ═══════════════════════════════════════════════════════
-//  寝室智控中心 v1.2 — Dialog-based Frontend
+//  寝室智控中心 v1.3 — Dialog-based Frontend with Socket.io
 // ═══════════════════════════════════════════════════════
 
 // ── Helpers ────────────────────────────────────────────
@@ -23,6 +23,11 @@ function formatSize(bytes) {
   if (bytes < 1073741824) return (bytes/1048576).toFixed(1) + ' MB';
   return (bytes/1073741824).toFixed(2) + ' GB';
 }
+
+// ── Socket.io 实时连接 ──────────────────────────────────
+const socket = io({ transports: ['websocket', 'polling'] });
+socket.on('connect', () => console.log('[WS] 已连接:', socket.id));
+socket.on('disconnect', () => console.log('[WS] 断开'));
 
 // ── Dialog 导航 ────────────────────────────────────────
 function openDialog(name) {
@@ -95,7 +100,7 @@ document.addEventListener('keydown', (e) => {
 })();
 
 // ═══════════════════════════════════════════════════════
-//  共享剪贴板
+//  共享剪贴板（Socket.io 实时同步）
 // ═══════════════════════════════════════════════════════
 const clipText = document.getElementById('clipboard-text');
 const clipDot = document.getElementById('clip-dot');
@@ -103,45 +108,43 @@ const clipTime = document.getElementById('clip-time');
 const clipBadge = document.getElementById('clip-badge');
 let lastClipUpdated = null;
 
-async function loadClipboard() {
-  try {
-    const res = await fetch('/api/clipboard');
-    const data = await res.json();
-    if (data.updatedAt && data.updatedAt !== lastClipUpdated) {
-      clipText.value = data.content;
-      lastClipUpdated = data.updatedAt;
-      clipDot.className = 'dot live';
-      clipTime.textContent = '已同步 · ' + new Date(data.updatedAt).toLocaleTimeString('zh-CN');
-      clipBadge.textContent = 'SYNC'; clipBadge.style.color = 'var(--neon)';
-    } else if (!data.updatedAt) {
-      clipDot.className = 'dot'; clipTime.textContent = '暂无内容';
-      clipBadge.textContent = 'IDLE'; clipBadge.style.color = 'var(--text-dim)';
-    }
-  } catch (_) { clipDot.className = 'dot'; clipTime.textContent = '连接中…'; }
+function showClipSync(data) {
+  if (!data.updatedAt) {
+    clipDot.className = 'dot'; clipTime.textContent = '暂无内容';
+    clipBadge.textContent = 'IDLE'; clipBadge.style.color = 'var(--text-dim)';
+    return;
+  }
+  if (data.updatedAt === lastClipUpdated) return;
+  clipText.value = data.content;
+  lastClipUpdated = data.updatedAt;
+  clipDot.className = 'dot live';
+  clipTime.textContent = '已同步 · ' + new Date(data.updatedAt).toLocaleTimeString('zh-CN');
+  clipBadge.textContent = 'SYNC'; clipBadge.style.color = 'var(--neon)';
 }
 
-document.getElementById('btn-push').addEventListener('click', async () => {
-  try {
-    const res = await fetch('/api/clipboard', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ content: clipText.value })
-    });
-    const data = await res.json();
-    lastClipUpdated = data.updatedAt;
-    clipDot.className = 'dot live';
-    clipTime.textContent = '已推送 · ' + new Date(data.updatedAt).toLocaleTimeString('zh-CN');
-  } catch (_) { alert('推送失败'); }
+// 收到剪贴板更新（来自其他设备）
+socket.on('clipboard:update', showClipSync);
+
+// 打开对话框时拉取最新
+const origOpenClip = () => socket.emit('clipboard:pull');
+document.querySelector('.dash-card[data-dialog="clipboard"]').addEventListener('click', origOpenClip);
+
+// 推送按钮
+document.getElementById('btn-push').addEventListener('click', () => {
+  const content = clipText.value;
+  socket.emit('clipboard:push', { content });
+  lastClipUpdated = new Date().toISOString();
+  clipDot.className = 'dot live';
+  clipTime.textContent = '已推送 · ' + new Date().toLocaleTimeString('zh-CN');
+  clipBadge.textContent = 'SYNC'; clipBadge.style.color = 'var(--neon)';
 });
 
+// 复制按钮
 document.getElementById('btn-copy').addEventListener('click', async () => {
   try { await navigator.clipboard.writeText(clipText.value); }
   catch (_) { clipText.select(); document.execCommand('copy'); }
   clipTime.textContent = '已复制 ✓';
-  setTimeout(() => { clipTime.textContent = '已同步 · ' + (lastClipUpdated ? new Date(lastClipUpdated).toLocaleTimeString('zh-CN') : ''); }, 2000);
 });
-
-setInterval(loadClipboard, 3000);
-loadClipboard();
 
 // ═══════════════════════════════════════════════════════
 //  AA 记账
@@ -226,64 +229,90 @@ expenseForm.addEventListener('submit', async (e) => {
 loadExpenses(); loadBalances();
 
 // ═══════════════════════════════════════════════════════
-//  留言板
+//  留言板（Socket.io 毫秒级实时同步）
 // ═══════════════════════════════════════════════════════
 const msgForm = document.getElementById('msg-form');
 const msgList = document.getElementById('msg-list');
 const msgBadge = document.getElementById('msg-badge');
-let lastMsgCount = 0;
+let msgCount = 0;
 
-async function loadMessages(showIndicator) {
-  try {
-    const res = await fetch('/api/messages');
-    const list = await res.json();
-    if (showIndicator && list.length !== lastMsgCount) {
-      msgBadge.textContent = 'NEW'; msgBadge.style.color = 'var(--gold)';
-      setTimeout(() => { msgBadge.textContent = 'LIVE'; msgBadge.style.color = 'var(--neon)'; }, 2000);
-    }
-    lastMsgCount = list.length;
-    if (list.length === 0) {
-      msgList.innerHTML = '<div class="empty-state">还没有留言，来说句话吧</div>';
-    } else {
-      msgList.innerHTML = list.map(m => `
-        <div class="msg-item">
-          <div class="msg-header">
-            <span class="msg-author">${escHtml(m.author)}</span>
-            <span class="msg-time">${fmtTime(m.date)}</span>
-            <button class="msg-del" data-id="${m.id}">×</button>
-          </div>
-          <div class="msg-body">${escHtml(m.content)}</div>
-        </div>`).join('');
-      msgList.querySelectorAll('.msg-del').forEach(btn => {
-        btn.addEventListener('click', async () => {
-          if (!confirm('删除这条留言？')) return;
-          await fetch('/api/messages/' + btn.dataset.id, { method: 'DELETE' });
-          lastMsgCount--; loadMessages(false);
-        });
-      });
-    }
-  } catch (_) { msgList.innerHTML = '<div class="empty-state" style="color:var(--danger)">加载失败</div>'; }
+function renderMsgItem(m) {
+  return `<div class="msg-item" data-msg-id="${m.id}">
+    <div class="msg-header">
+      <span class="msg-author">${escHtml(m.author)}</span>
+      <span class="msg-time">${fmtTime(m.date)}</span>
+      <button class="msg-del" data-id="${m.id}">×</button>
+    </div>
+    <div class="msg-body">${escHtml(m.content)}</div>
+  </div>`;
 }
 
-msgForm.addEventListener('submit', async (e) => {
+function bindMsgDel(container) {
+  container.querySelectorAll('.msg-del').forEach(btn => {
+    btn.addEventListener('click', () => {
+      if (!confirm('删除这条留言？')) return;
+      socket.emit('message:delete', { id: btn.dataset.id });
+    });
+  });
+}
+
+// 初始加载全部消息
+socket.on('messages:all', (list) => {
+  msgCount = list.length;
+  if (list.length === 0) {
+    msgList.innerHTML = '<div class="empty-state">还没有留言，来说句话吧</div>';
+  } else {
+    msgList.innerHTML = list.map(renderMsgItem).join('');
+    bindMsgDel(msgList);
+  }
+});
+
+// 新消息到达（其他设备发来的，或自己发的广播回来）
+socket.on('message:new', (m) => {
+  msgCount++;
+  msgBadge.textContent = 'NEW'; msgBadge.style.color = 'var(--gold)';
+  setTimeout(() => { msgBadge.textContent = 'LIVE'; msgBadge.style.color = 'var(--neon)'; }, 2000);
+  // 移除空状态
+  const empty = msgList.querySelector('.empty-state');
+  if (empty) empty.remove();
+  // 插入到最前面
+  msgList.insertAdjacentHTML('afterbegin', renderMsgItem(m));
+  bindMsgDel(msgList);
+  // 保持最多 200 条
+  const items = msgList.querySelectorAll('.msg-item');
+  for (let i = 200; i < items.length; i++) items[i].remove();
+});
+
+// 消息被删除
+socket.on('message:removed', ({ id }) => {
+  msgCount = Math.max(0, msgCount - 1);
+  const el = msgList.querySelector(`[data-msg-id="${id}"]`);
+  if (el) el.remove();
+  if (!msgList.querySelector('.msg-item')) {
+    msgList.innerHTML = '<div class="empty-state">还没有留言，来说句话吧</div>';
+  }
+});
+
+// 消息数量更新
+socket.on('message:count', (count) => { msgCount = count; });
+
+// 打开对话框时拉取最新
+document.querySelector('.dash-card[data-dialog="messages"]').addEventListener('click', () => {
+  socket.emit('messages:get');
+});
+
+// 发送消息
+msgForm.addEventListener('submit', (e) => {
   e.preventDefault();
   const btn = msgForm.querySelector('button[type="submit"]');
   const author = document.getElementById('msg-author').value.trim();
   const content = document.getElementById('msg-content').value.trim();
   if (!author || !content) return;
   btn.disabled = true; btn.textContent = '…';
-  try {
-    await fetch('/api/messages', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ author, content })
-    });
-    document.getElementById('msg-content').value = ''; loadMessages(false);
-  } catch (_) { alert('发送失败'); }
-  finally { btn.disabled = false; btn.textContent = '💬 发送'; }
+  socket.emit('message:send', { author, content });
+  document.getElementById('msg-content').value = '';
+  btn.disabled = false; btn.textContent = '💬 发送';
 });
-
-setInterval(() => loadMessages(true), 4000);
-loadMessages(false);
 
 // ═══════════════════════════════════════════════════════
 //  文件闪传
