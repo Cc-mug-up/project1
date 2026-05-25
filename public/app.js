@@ -126,8 +126,9 @@ function showClipSync(data) {
 socket.on('clipboard:update', showClipSync);
 
 // 打开对话框时拉取最新
-const origOpenClip = () => socket.emit('clipboard:pull');
-document.querySelector('.dash-card[data-dialog="clipboard"]').addEventListener('click', origOpenClip);
+document.querySelector('.dash-card[data-dialog="clipboard"]').addEventListener('click', () => {
+  socket.emit('clipboard:pull');
+});
 
 // 推送按钮
 document.getElementById('btn-push').addEventListener('click', () => {
@@ -144,44 +145,6 @@ document.getElementById('btn-copy').addEventListener('click', async () => {
   try { await navigator.clipboard.writeText(clipText.value); }
   catch (_) { clipText.select(); document.execCommand('copy'); }
   clipTime.textContent = '已复制 ✓';
-});
-
-// ── 自动剪贴板：Ctrl+C 自动推送 + 手机端 Toast ────────
-const clipToast = document.getElementById('clip-toast');
-let clipToastTimer;
-
-// 收到其他设备推送 → 弹 toast（仅在对话框未打开时）
-const origShowClipSync = showClipSync;
-showClipSync = function(data) {
-  origShowClipSync(data);
-  const isOpen = document.getElementById('dialog-clipboard').classList.contains('open');
-  if (!isOpen && data.updatedAt && data.content) {
-    clipToast.classList.add('show');
-    clearTimeout(clipToastTimer);
-    clipToastTimer = setTimeout(() => clipToast.classList.remove('show'), 5000);
-  }
-};
-// 点击 toast → 复制到系统剪贴板
-clipToast.addEventListener('click', async () => {
-  try { await navigator.clipboard.writeText(clipText.value); }
-  catch (_) { clipText.select(); document.execCommand('copy'); }
-  clipToast.querySelector('.clip-toast-msg').textContent = '✅ 已复制到剪贴板！';
-  setTimeout(() => {
-    clipToast.querySelector('.clip-toast-msg').textContent = '📋 收到新内容 · 点击粘贴到手机';
-  }, 2000);
-  clipToast.classList.remove('show');
-});
-
-// 监听用户在页面上的 Ctrl+C / 右键复制 → 自动推送
-document.addEventListener('copy', () => {
-  const sel = window.getSelection()?.toString()?.trim();
-  if (sel && sel.length > 0 && sel.length < 50000) {
-    clipText.value = sel;
-    socket.emit('clipboard:push', { content: sel });
-    lastClipUpdated = new Date().toISOString();
-    clipDot.className = 'dot live';
-    clipTime.textContent = '自动推送 · ' + new Date().toLocaleTimeString('zh-CN');
-  }
 });
 
 // ═══════════════════════════════════════════════════════
