@@ -11,40 +11,19 @@
 | 💬 留言板 | 局域网实时消息，类似群聊 |
 | 📁 文件闪传 | 拖拽上传、满速下载、上传下载双进度条 |
 
-## 快速开始
+## 快速开始（只需一步）
 
-```bash
-# 安装依赖
-npm install
+**双击 `setup.bat`**——自动装依赖、配防火墙、启动服务，无需任何手动操作。
 
-# 启动服务
-npm start
-```
+（前提：电脑已安装 [Node.js](https://nodejs.org)，下载 LTS 版本即可）
 
-终端会打印局域网地址，例如：
+> 首次运行会弹出 UAC 提权窗口，点"是"即可（用于配置防火墙）。
 
-```
-WLAN:  http://192.168.0.100:3000
-```
+终端会打印局域网地址，例如 `http://192.168.0.100:3000`。手机连同一 Wi-Fi 打开这个地址，或扫页面上的二维码。
 
-- 电脑浏览器打开 `http://localhost:3000`
-- 手机连接同一 Wi-Fi，打开 `http://192.168.0.100:3000`（扫页面上的二维码也行）
+## 换网 / 换电脑
 
-## Windows 防火墙
-
-手机打不开通常是防火墙拦截。以管理员身份运行一次：
-
-```powershell
-netsh advfirewall firewall add rule name="DormShare" dir=in action=allow protocol=TCP localport=3000
-```
-
-## 开机自启
-
-双击 `start.bat` 手动启动，或已将 `start-silent.vbs` 放入启动文件夹实现开机自动后台运行。
-
-## 换网了怎么办
-
-IP 会变。打开页面顶部 Banner 会显示当前地址，点「📱 扫码」用手机扫二维码即可。
+IP 会变，页面顶部 Banner 实时显示当前地址。新电脑只需装 Node.js 后双击 `setup.bat`。
 
 ## 文件存在哪里
 
