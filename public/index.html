@@ -3,10 +3,10 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>寝室智控中心 v1.3</title>
+<title>寝室智控中心 v2.0</title>
 <style>
 /* ═══════════════════════════════════════════════════════
-   CYBERPUNK DASHBOARD — 寝室智控中心 v1.3
+   CYBERPUNK DASHBOARD — 寝室智控中心 v2.0
    ═══════════════════════════════════════════════════════ */
 :root {
   --bg:#06060e; --bg-card:#0c0c1a; --border:#181830;
@@ -101,6 +101,17 @@ body::after{content:"";position:fixed;inset:0;pointer-events:none;z-index:9999;
 .dialog-bar-title{font-size:.9rem;font-weight:700;color:var(--text-bright)}
 .dialog-body{flex:1;overflow-y:auto;padding:16px 18px 24px;scrollbar-width:thin;scrollbar-color:#222 transparent}
 
+/* ── Clipboard Toast ─────────────────────────── */
+.clip-toast{
+  position:fixed;top:16px;left:50%;transform:translateX(-50%) translateY(-120px);
+  z-index:200;background:var(--neon);color:#000;padding:10px 20px;border-radius:20px;
+  font-size:.8rem;font-weight:600;cursor:pointer;white-space:nowrap;
+  transition:transform .3s cubic-bezier(.34,1.56,.64,1);
+  box-shadow:0 4px 24px rgba(0,187,255,.5);
+}
+.clip-toast.show{transform:translateX(-50%) translateY(0)}
+.clip-toast-msg{pointer-events:none}
+
 /* ── QR Modal ────────────────────────────────── */
 .qr-overlay{position:fixed;inset:0;background:rgba(0,0,0,.7);display:flex;align-items:center;justify-content:center;z-index:10000}
 .qr-box{background:var(--bg-card);border:1px solid var(--border);border-radius:var(--radius);padding:24px;text-align:center;max-width:300px;width:90%}
@@ -192,6 +203,14 @@ body::after{content:"";position:fixed;inset:0;pointer-events:none;z-index:9999;
 .file-actions{display:flex;gap:4px;flex-shrink:0}
 .file-actions button{padding:4px 10px;font-size:.68rem}
 
+/* ── P2P Transfer ───────────────────────────── */
+.p2p-peer{display:inline-flex;align-items:center;gap:4px;padding:4px 10px;margin:2px;border-radius:12px;font-size:.68rem;background:rgba(0,187,255,.08);border:1px solid rgba(0,187,255,.15);cursor:pointer;transition:all .2s}
+.p2p-peer:hover{background:var(--neon-dim);border-color:var(--neon)}
+.p2p-peer.selected{background:var(--neon);color:#000;border-color:var(--neon)}
+.p2p-transfer-item{padding:8px 10px;margin:4px 0;border-radius:6px;background:rgba(255,255,255,.02);border:1px solid var(--border);font-size:.72rem}
+.p2p-transfer-item .p2p-name{color:var(--text);margin-bottom:3px}
+.p2p-transfer-item .p2p-meta{display:flex;justify-content:space-between;color:var(--text-dim);font-family:var(--font-mono);font-size:.66rem}
+
 /* ── Responsive ──────────────────────────────── */
 @media (max-width:500px){
   .dashboard{grid-template-columns:1fr;max-width:340px}
@@ -225,6 +244,11 @@ body::after{content:"";position:fixed;inset:0;pointer-events:none;z-index:9999;
     <button class="banner-qr-btn" id="banner-qr-btn">📱 扫码</button>
   </div>
 </header>
+
+<!-- ═══ Clipboard Toast（收到新内容时弹出） ═══ -->
+<div class="clip-toast" id="clip-toast">
+  <span class="clip-toast-msg">📋 收到新内容 · 点击粘贴到手机</span>
+</div>
 
 <!-- ═══ QR Modal ═══ -->
 <div class="qr-overlay" id="qr-overlay" style="display:none">
@@ -388,7 +412,20 @@ body::after{content:"";position:fixed;inset:0;pointer-events:none;z-index:9999;
         </div>
         <div class="dl-bar-wrap"><div class="dl-bar" id="dl-bar" style="width:0%"></div></div>
       </div>
-      <div class="list-wrap" id="file-list-wrap" style="max-height:280px">
+      <div style="margin-top:12px;padding-top:10px;border-top:1px solid var(--border)">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
+          <span style="font-size:.78rem;font-weight:700;color:var(--text-bright)">⚡ P2P 直传</span>
+          <span style="font-size:.65rem;color:var(--text-dim);font-family:var(--font-mono)" id="p2p-peer-count">搜索设备…</span>
+        </div>
+        <div id="p2p-peers" style="font-size:.72rem;color:var(--text-dim);margin-bottom:8px"></div>
+        <div class="file-upload-zone" id="p2p-zone" style="border-color:rgba(226,168,64,.3);border-style:dashed">
+          <div class="icon">⚡</div>
+          <div class="hint">拖拽文件到此处 → 选择目标设备 → P2P 直传</div>
+          <input type="file" id="p2p-input" style="display:none">
+        </div>
+        <div id="p2p-transfer-list" style="margin-top:8px"></div>
+      </div>
+      <div class="list-wrap" id="file-list-wrap" style="max-height:200px;margin-top:10px">
         <div id="file-list"></div>
       </div>
     </div>

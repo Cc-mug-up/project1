@@ -146,6 +146,43 @@ document.getElementById('btn-copy').addEventListener('click', async () => {
   clipTime.textContent = '已复制 ✓';
 });
 
+// ── 自动剪贴板：Ctrl+C 自动推送 + 手机端 Toast ────────
+const clipToast = document.getElementById('clip-toast');
+let clipToastTimer;
+
+// 收到其他设备推送 → 弹出 toast
+const origShowClipSync = showClipSync;
+showClipSync = function(data) {
+  origShowClipSync(data);
+  if (data.updatedAt && data.content) {
+    clipToast.classList.add('show');
+    clearTimeout(clipToastTimer);
+    clipToastTimer = setTimeout(() => clipToast.classList.remove('show'), 5000);
+  }
+};
+// 点击 toast → 复制到系统剪贴板
+clipToast.addEventListener('click', async () => {
+  try { await navigator.clipboard.writeText(clipText.value); }
+  catch (_) { clipText.select(); document.execCommand('copy'); }
+  clipToast.querySelector('.clip-toast-msg').textContent = '✅ 已复制到剪贴板！';
+  setTimeout(() => {
+    clipToast.querySelector('.clip-toast-msg').textContent = '📋 收到新内容 · 点击粘贴到手机';
+  }, 2000);
+  clipToast.classList.remove('show');
+});
+
+// 监听用户在页面上的 Ctrl+C / 右键复制 → 自动推送
+document.addEventListener('copy', () => {
+  const sel = window.getSelection()?.toString()?.trim();
+  if (sel && sel.length > 0 && sel.length < 50000) {
+    clipText.value = sel;
+    socket.emit('clipboard:push', { content: sel });
+    lastClipUpdated = new Date().toISOString();
+    clipDot.className = 'dot live';
+    clipTime.textContent = '自动推送 · ' + new Date().toLocaleTimeString('zh-CN');
+  }
+});
+
 // ═══════════════════════════════════════════════════════
 //  AA 记账
 // ═══════════════════════════════════════════════════════
@@ -444,3 +481,196 @@ async function loadFiles() {
 
 setInterval(loadFiles, 5000);
 loadFiles();
+
+// ═══════════════════════════════════════════════════════
+//  WebRTC P2P 直传（千兆局域网满速）
+// ═══════════════════════════════════════════════════════
+const p2pPeersEl = document.getElementById('p2p-peers');
+const p2pCountEl = document.getElementById('p2p-peer-count');
+const p2pZone = document.getElementById('p2p-zone');
+const p2pInput = document.getElementById('p2p-input');
+const p2pTransferList = document.getElementById('p2p-transfer-list');
+
+const peerConns = {};       // socketId → RTCPeerConnection
+const peerChannels = {};    // socketId → RTCDataChannel
+let selectedPeer = null;
+
+const rtcConfig = { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] };
+
+// ── Peer 发现 ─────────────────────────────────────────
+socket.on('p2p:peers', (peers) => {
+  p2pCountEl.textContent = peers.length > 0 ? `${peers.length} 台设备在线` : '暂无其他设备';
+  p2pPeersEl.innerHTML = peers.map(p =>
+    `<span class="p2p-peer" data-peer="${p.id}">🖥 ${p.id.slice(0,6)}</span>`
+  ).join('');
+  // 点击选择目标设备
+  p2pPeersEl.querySelectorAll('.p2p-peer').forEach(el => {
+    el.addEventListener('click', () => {
+      p2pPeersEl.querySelectorAll('.p2p-peer').forEach(e => e.classList.remove('selected'));
+      el.classList.add('selected');
+      selectedPeer = el.dataset.peer;
+    });
+  });
+});
+socket.on('p2p:peer-joined', () => {});
+socket.on('p2p:peer-left', ({ id }) => {
+  if (selectedPeer === id) { selectedPeer = null; }
+  if (peerConns[id]) { peerConns[id].close(); delete peerConns[id]; }
+  if (peerChannels[id]) delete peerChannels[id];
+});
+
+// ── 选择文件 + 目标 → 发起 P2P 传输 ──────────────────
+p2pZone.addEventListener('click', () => p2pInput.click());
+p2pZone.addEventListener('dragover', (e) => { e.preventDefault(); p2pZone.classList.add('dragover'); });
+p2pZone.addEventListener('dragleave', () => p2pZone.classList.remove('dragover'));
+p2pZone.addEventListener('drop', (e) => {
+  e.preventDefault(); p2pZone.classList.remove('dragover');
+  if (e.dataTransfer.files.length) sendP2PFile(e.dataTransfer.files[0]);
+});
+p2pInput.addEventListener('change', () => {
+  if (p2pInput.files.length) sendP2PFile(p2pInput.files[0]);
+});
+
+function sendP2PFile(file) {
+  if (!selectedPeer) { alert('请先选择一个目标设备'); return; }
+  const peerId = selectedPeer;
+
+  // 显示传输项
+  const itemId = 'p2p-' + Date.now();
+  p2pTransferList.insertAdjacentHTML('afterbegin', `
+    <div class="p2p-transfer-item" id="${itemId}">
+      <div class="p2p-name">⚡ ${escHtml(file.name)} → ${peerId.slice(0,6)}</div>
+      <div class="p2p-meta">
+        <span>${formatSize(file.size)} · 等待连接…</span>
+        <span class="p2p-status">连接中</span>
+      </div>
+      <div class="dl-bar-wrap"><div class="dl-bar" style="width:0%;background:var(--gold)"></div></div>
+    </div>`);
+
+  const pc = new RTCPeerConnection(rtcConfig);
+  peerConns[peerId] = pc;
+  const channel = pc.createDataChannel('file', { ordered: true });
+  peerChannels[peerId] = channel;
+  channel.binaryType = 'arraybuffer';
+
+  let offset = 0;
+  const CHUNK = 16384; // 16KB chunks
+  const startTime = Date.now();
+
+  channel.onopen = () => {
+    const meta = JSON.stringify({ name: file.name, size: file.size, type: file.type });
+    channel.send(meta);
+    readNext();
+  };
+
+  function readNext() {
+    if (offset >= file.size) { channel.close(); return; }
+    const slice = file.slice(offset, offset + CHUNK);
+    const reader = new FileReader();
+    reader.onload = () => { channel.send(reader.result); offset += CHUNK; readNext(); };
+    reader.onerror = () => console.error('read error');
+    reader.readAsArrayBuffer(slice);
+    // 更新进度
+    const pct = Math.round(offset / file.size * 100);
+    const speed = (Date.now() - startTime) > 0 ? offset / ((Date.now() - startTime) / 1000) : 0;
+    const bar = document.querySelector(`#${itemId} .dl-bar`);
+    const statusEl = document.querySelector(`#${itemId} .p2p-status`);
+    const metaEl = document.querySelector(`#${itemId} .p2p-meta span`);
+    if (bar) bar.style.width = pct + '%';
+    if (statusEl) statusEl.textContent = pct + '%';
+    if (metaEl) metaEl.textContent = formatSize(file.size) + ' · ' + formatSize(speed) + '/s';
+  }
+
+  channel.onclose = () => {
+    const statusEl = document.querySelector(`#${itemId} .p2p-status`);
+    if (statusEl) statusEl.textContent = '完成 ✓';
+  };
+
+  pc.onicecandidate = (e) => {
+    if (e.candidate) socket.emit('p2p:signal', { to: peerId, type: 'ice', data: e.candidate });
+  };
+  pc.createOffer().then(offer => pc.setLocalDescription(offer)).then(() => {
+    socket.emit('p2p:signal', { to: peerId, type: 'offer', data: pc.localDescription });
+  });
+
+  p2pInput.value = '';
+}
+
+// ── 接收端：处理 WebRTC 连接 ──────────────────────────
+socket.on('p2p:signal', async ({ from, type, data }) => {
+  if (type === 'offer') {
+    const pc = new RTCPeerConnection(rtcConfig);
+    peerConns[from] = pc;
+    pc.onicecandidate = (e) => {
+      if (e.candidate) socket.emit('p2p:signal', { to: from, type: 'ice', data: e.candidate });
+    };
+
+    let receivedMeta = null, receivedChunks = [], receivedSize = 0;
+    const startTime = Date.now();
+
+    pc.ondatachannel = (e) => {
+      const channel = e.channel;
+      channel.binaryType = 'arraybuffer';
+      peerChannels[from] = channel;
+
+      const itemId = 'p2p-recv-' + Date.now();
+      p2pTransferList.insertAdjacentHTML('afterbegin', `
+        <div class="p2p-transfer-item" id="${itemId}">
+          <div class="p2p-name">⬇ 接收中…</div>
+          <div class="p2p-meta">
+            <span>等待数据…</span>
+            <span class="p2p-status">0%</span>
+          </div>
+          <div class="dl-bar-wrap"><div class="dl-bar" style="width:0%;background:var(--neon)"></div></div>
+        </div>`);
+
+      channel.onmessage = (ev) => {
+        if (typeof ev.data === 'string') {
+          receivedMeta = JSON.parse(ev.data);
+          document.querySelector(`#${itemId} .p2p-name`).textContent = '⬇ ' + receivedMeta.name;
+          return;
+        }
+        receivedChunks.push(ev.data);
+        receivedSize += ev.data.byteLength;
+        if (receivedMeta) {
+          const pct = Math.round(receivedSize / receivedMeta.size * 100);
+          const speed = (Date.now() - startTime) > 0 ? receivedSize / ((Date.now() - startTime) / 1000) : 0;
+          const bar = document.querySelector(`#${itemId} .dl-bar`);
+          const statusEl = document.querySelector(`#${itemId} .p2p-status`);
+          const metaEl = document.querySelector(`#${itemId} .p2p-meta span`);
+          if (bar) bar.style.width = pct + '%';
+          if (statusEl) statusEl.textContent = pct + '%';
+          if (metaEl) metaEl.textContent = formatSize(receivedMeta.size) + ' · ' + formatSize(speed) + '/s';
+        }
+      };
+
+      channel.onclose = () => {
+        if (receivedMeta) {
+          const blob = new Blob(receivedChunks, { type: receivedMeta.type || 'application/octet-stream' });
+          const url = URL.createObjectURL(blob);
+          const a = document.createElement('a');
+          a.href = url; a.download = receivedMeta.name;
+          document.body.appendChild(a); a.click(); document.body.removeChild(a);
+          URL.revokeObjectURL(url);
+          const statusEl = document.querySelector(`#${itemId} .p2p-status`);
+          if (statusEl) statusEl.textContent = '完成 ✓';
+        }
+      };
+    };
+
+    await pc.setRemoteDescription(new RTCSessionDescription(data));
+    const answer = await pc.createAnswer();
+    await pc.setLocalDescription(answer);
+    socket.emit('p2p:signal', { to: from, type: 'answer', data: pc.localDescription });
+  }
+
+  if (type === 'answer') {
+    const pc = peerConns[from];
+    if (pc) await pc.setRemoteDescription(new RTCSessionDescription(data));
+  }
+
+  if (type === 'ice') {
+    const pc = peerConns[from];
+    if (pc) await pc.addIceCandidate(new RTCIceCandidate(data));
+  }
+});

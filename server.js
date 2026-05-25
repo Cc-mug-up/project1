@@ -288,8 +288,41 @@ io.on('connection', (socket) => {
     socket.emit('messages:all', getMessages());
   });
 
+  // ── WebRTC 信令中继 ──────────────────────────────────
+  // 在线设备列表
+  const deviceInfo = { id: socket.id, ip, name: null, joined: Date.now() };
+  socket.join('p2p-room');
+
+  // 广播在线设备列表给所有人
+  const broadcastPeers = () => {
+    const peers = [];
+    io.in('p2p-room').fetchSockets().then(sockets => {
+      sockets.forEach(s => {
+        if (s.id !== socket.id) peers.push({ id: s.id, ip: s.handshake.address });
+      });
+      socket.emit('p2p:peers', peers);
+    });
+  };
+  broadcastPeers();
+  socket.broadcast.emit('p2p:peer-joined', { id: socket.id, ip });
+
+  // 信令转发：offer / answer / ICE
+  socket.on('p2p:signal', ({ to, type, data }) => {
+    io.to(to).emit('p2p:signal', { from: socket.id, type, data });
+  });
+
+  // 文件传输请求
+  socket.on('p2p:file-request', ({ to, fileInfo }) => {
+    io.to(to).emit('p2p:file-request', { from: socket.id, fileInfo });
+  });
+
+  socket.on('p2p:file-response', ({ to, accepted }) => {
+    io.to(to).emit('p2p:file-response', { from: socket.id, accepted });
+  });
+
   socket.on('disconnect', () => {
     console.log(`[WS] 设备断开: ${ip}`);
+    io.emit('p2p:peer-left', { id: socket.id });
   });
 });
 
