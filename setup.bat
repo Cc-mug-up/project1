@@ -4,7 +4,7 @@ cd /d "%~dp0"
 
 echo.
 echo ═══════════════════════════════════════════
-echo   寝室智控中心 v1.2 - 环境初始化
+echo   寝室智控中心 v2.0 - MongoDB 版
 echo ═══════════════════════════════════════════
 echo.
 
@@ -17,6 +17,17 @@ if %errorlevel% neq 0 (
     exit /b 1
 )
 echo [✓] Node.js 已就绪
+
+:: ── 检查 MongoDB ───────────────────────────
+mongosh --version >nul 2>&1
+if %errorlevel% neq 0 (
+    echo [错误] 未检测到 MongoDB，请先安装：
+    echo https://www.mongodb.com/try/download/community
+    echo 安装后 MongoDB 会自动以后台服务运行
+    pause
+    exit /b 1
+)
+echo [✓] MongoDB 已就绪
 
 :: ── 安装依赖 ───────────────────────────────
 if not exist "node_modules" (

@@ -6,6 +6,14 @@ const os = require('os');
 const multer = require('multer');
 const { Server } = require('socket.io');
 
+// ── MongoDB ──────────────────────────────────────────────
+const { connectDB } = require('./models/db');
+const User = require('./models/User');
+const Clipboard = require('./models/Clipboard');
+const Expense = require('./models/Expense');
+const Message = require('./models/Message');
+const FileMeta = require('./models/FileMeta');
+
 const app = express();
 const server = http.createServer(app);
 const io = new Server(server);
@@ -13,30 +21,23 @@ const PORT = 3000;
 
 app.use(express.json());
 
-// 禁用缓存（防止手机浏览器缓存旧版文件导致乱码）
+// 禁用缓存
 app.use((_req, res, next) => {
   res.set('Cache-Control', 'no-store');
   next();
 });
 app.use(express.static(path.join(__dirname, 'public')));
 
-// ── 数据目录 ────────────────────────────────────────────
+// ── 文件上传目录 ────────────────────────────────────────
 const DATA_DIR = path.join(__dirname, 'data');
 if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR);
-
 const UPLOADS_DIR = path.join(DATA_DIR, 'uploads');
 if (!fs.existsSync(UPLOADS_DIR)) fs.mkdirSync(UPLOADS_DIR);
-
-const CLIPBOARD_FILE = path.join(DATA_DIR, 'clipboard.json');
-const EXPENSES_FILE = path.join(DATA_DIR, 'expenses.json');
-const FILES_META_FILE = path.join(DATA_DIR, 'files.json');
 
 // ── Multer 配置 ─────────────────────────────────────────
 function fixFilename(name) {
   if (!name) return name;
-  // 如果已经包含 CJK 字符，说明 multer 正确解析了 UTF-8 文件名 → 直接返回
   if (/[一-鿿㐀-䶿]/.test(name)) return name;
-  // 尝试 latin1→utf8 恢复（部分浏览器只发 filename 不含 filename*=UTF-8''）
   try {
     const recovered = Buffer.from(name, 'latin1').toString('utf8');
     if (/[一-鿿㐀-䶿]/.test(recovered)) return recovered;
@@ -46,29 +47,19 @@ function fixFilename(name) {
 
 const storage = multer.diskStorage({
   destination: UPLOADS_DIR,
-  filename: (_req, file, cb) => {
-    cb(null, fixFilename(file.originalname));
-  }
+  filename: (_req, file, cb) => cb(null, fixFilename(file.originalname))
 });
 const upload = multer({ storage, limits: { fileSize: 500 * 1024 * 1024 } });
 
-// 文件元数据
-function getFilesMeta() { return readJSON(FILES_META_FILE, []); }
-function saveFilesMeta(list) { writeJSON(FILES_META_FILE, list); }
-function syncFilesMeta() {
-  const meta = getFilesMeta();
+// ── 文件闪传 API（HTTP：元数据走 DB，文件本身存磁盘） ───
+app.get('/api/files', async (_req, res) => {
+  const list = await FileMeta.find().sort({ date: -1 });
   const onDisk = new Set(fs.readdirSync(UPLOADS_DIR));
-  return meta.filter(f => onDisk.has(f.name));
-}
-
-// ── 文件闪传 API ─────────────────────────────────────────
-app.get('/api/files', (_req, res) => {
-  res.json(syncFilesMeta());
+  res.json(list.filter(f => onDisk.has(f.name)));
 });
 
 app.post('/api/files/upload', (req, res, next) => {
-  req.setTimeout(0);
-  next();
+  req.setTimeout(0); next();
 }, (req, res, next) => {
   upload.single('file')(req, res, (err) => {
     if (err) {
@@ -77,18 +68,13 @@ app.post('/api/files/upload', (req, res, next) => {
     }
     next();
   });
-}, (req, res) => {
+}, async (req, res) => {
   if (!req.file) return res.status(400).json({ error: 'no file' });
-  const meta = syncFilesMeta();
-  const idx = meta.findIndex(f => f.name === req.file.filename);
-  const entry = {
-    name: req.file.filename,
-    size: req.file.size,
-    date: new Date().toISOString(),
-    type: req.file.mimetype
-  };
-  if (idx >= 0) meta[idx] = entry; else meta.unshift(entry);
-  saveFilesMeta(meta);
+  const entry = await FileMeta.findOneAndUpdate(
+    { name: req.file.filename },
+    { name: req.file.filename, size: req.file.size, date: new Date(), type: req.file.mimetype },
+    { upsert: true, new: true }
+  );
   res.json(entry);
 });
 
@@ -98,139 +84,98 @@ app.get('/api/files/download/:name', (req, res) => {
   res.download(filePath);
 });
 
-app.delete('/api/files/:name', (req, res) => {
+app.delete('/api/files/:name', async (req, res) => {
   const filePath = path.join(UPLOADS_DIR, req.params.name);
   if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
-  const meta = syncFilesMeta();
-  saveFilesMeta(meta);
+  await FileMeta.deleteOne({ name: req.params.name });
   res.json({ ok: true });
 });
 
-function readJSON(file, fallback) {
-  try { return JSON.parse(fs.readFileSync(file, 'utf-8')); }
-  catch { return fallback; }
-}
-function writeJSON(file, data) {
-  fs.writeFileSync(file, JSON.stringify(data, null, 2), 'utf-8');
-}
-
-// ── 剪贴板 API ──────────────────────────────────────────
-app.get('/api/clipboard', (_req, res) => {
-  const data = readJSON(CLIPBOARD_FILE, { content: '', updatedAt: null });
+// ── 剪贴板 API（HTTP 兜底） ──────────────────────────────
+app.get('/api/clipboard', async (_req, res) => {
+  const data = await Clipboard.getContent();
   res.json(data);
 });
 
-app.post('/api/clipboard', (req, res) => {
+app.post('/api/clipboard', async (req, res) => {
   const { content } = req.body;
   if (typeof content !== 'string') return res.status(400).json({ error: 'content required' });
-  const data = { content, updatedAt: new Date().toISOString() };
-  writeJSON(CLIPBOARD_FILE, data);
+  const data = await Clipboard.setContent(content);
   res.json(data);
 });
 
 // ── 记账 API ────────────────────────────────────────────
-function getExpenses() {
-  return readJSON(EXPENSES_FILE, []);
-}
-function saveExpenses(list) {
-  writeJSON(EXPENSES_FILE, list);
-}
-
-app.get('/api/expenses', (_req, res) => {
-  res.json(getExpenses());
+app.get('/api/expenses', async (_req, res) => {
+  res.json(await Expense.find().sort({ date: -1 }));
 });
 
-app.post('/api/expenses', (req, res) => {
+app.post('/api/expenses', async (req, res) => {
   const { amount, category, description, payer } = req.body;
   if (!amount || !payer) return res.status(400).json({ error: 'amount and payer required' });
-  const expense = {
+  await User.ensureExists(payer.trim());
+  const expense = await Expense.create({
     id: Date.now().toString(36) + Math.random().toString(36).slice(2, 6),
-    amount: parseFloat(amount),
-    category: category || '其他',
-    description: description || '',
-    payer,
-    date: new Date().toISOString()
-  };
-  const list = getExpenses();
-  list.unshift(expense);
-  saveExpenses(list);
+    amount: parseFloat(amount), category: category || '其他',
+    description: description || '', payer: payer.trim(), date: new Date()
+  });
   res.json(expense);
 });
 
-app.delete('/api/expenses/:id', (req, res) => {
-  const list = getExpenses();
-  const idx = list.findIndex(e => e.id === req.params.id);
-  if (idx === -1) return res.status(404).json({ error: 'not found' });
-  list.splice(idx, 1);
-  saveExpenses(list);
+app.delete('/api/expenses/:id', async (req, res) => {
+  const doc = await Expense.findOneAndDelete({ id: req.params.id });
+  if (!doc) return res.status(404).json({ error: 'not found' });
   res.json({ ok: true });
 });
 
-app.get('/api/balances', (_req, res) => {
-  const list = getExpenses();
-  const totals = {}; // { name: totalPaid }
-  list.forEach(e => {
-    totals[e.payer] = (totals[e.payer] || 0) + e.amount;
-  });
-  const totalAll = Object.values(totals).reduce((s, v) => s + v, 0);
+app.get('/api/balances', async (_req, res) => {
+  const list = await Expense.find();
+  const totals = {};
+  list.forEach(e => { totals[e.payer] = (totals[e.payer] || 0) + e.amount; });
   const names = Object.keys(totals);
+  const totalAll = Object.values(totals).reduce((s, v) => s + v, 0);
   const perPerson = names.length > 0 ? totalAll / names.length : 0;
 
   const balances = names.map(name => ({
-    name,
-    paid: Math.round(totals[name] * 100) / 100,
+    name, paid: Math.round(totals[name] * 100) / 100,
     share: Math.round(perPerson * 100) / 100,
     balance: Math.round((totals[name] - perPerson) * 100) / 100
   }));
 
-  // 结算方案
   const creditors = balances.filter(b => b.balance > 0).sort((a, b) => b.balance - a.balance);
   const debtors = balances.filter(b => b.balance < 0).sort((a, b) => a.balance - b.balance);
   const settlements = [];
   let ci = 0, di = 0;
   while (ci < creditors.length && di < debtors.length) {
-    const c = creditors[ci];
-    const d = debtors[di];
+    const c = creditors[ci], d = debtors[di];
     const amount = Math.min(c.balance, -d.balance);
     settlements.push({ from: d.name, to: c.name, amount: Math.round(amount * 100) / 100 });
-    c.balance -= amount;
-    d.balance += amount;
+    c.balance -= amount; d.balance += amount;
     if (c.balance < 0.01) ci++;
     if (d.balance > -0.01) di++;
   }
-
-  res.json({ members: names, totalAll: Math.round(totalAll * 100) / 100, perPerson: Math.round(perPerson * 100) / 100, balances, settlements });
+  res.json({ members: names, totalAll: Math.round(totalAll * 100) / 100,
+    perPerson: Math.round(perPerson * 100) / 100, balances, settlements });
 });
 
-// ── 留言板 API ──────────────────────────────────────────
-const MESSAGES_FILE = path.join(DATA_DIR, 'messages.json');
-function getMessages() { return readJSON(MESSAGES_FILE, []); }
-function saveMessages(list) { writeJSON(MESSAGES_FILE, list); }
+// ── 留言板 API（HTTP 兜底） ──────────────────────────────
+app.get('/api/messages', async (_req, res) => {
+  res.json(await Message.find().sort({ date: -1 }).limit(200));
+});
 
-app.get('/api/messages', (_req, res) => { res.json(getMessages()); });
-
-app.post('/api/messages', (req, res) => {
+app.post('/api/messages', async (req, res) => {
   const { author, content } = req.body;
   if (!author || !content) return res.status(400).json({ error: 'author and content required' });
-  const msg = {
+  await User.ensureExists(author.trim());
+  const msg = await Message.create({
     id: Date.now().toString(36) + Math.random().toString(36).slice(2, 6),
-    author: author.trim(),
-    content: content.trim(),
-    date: new Date().toISOString()
-  };
-  const list = getMessages();
-  list.unshift(msg);
-  if (list.length > 200) list.length = 200;
-  saveMessages(list);
+    author: author.trim(), content: content.trim(), date: new Date()
+  });
   res.json(msg);
 });
 
-app.delete('/api/messages/:id', (req, res) => {
-  const list = getMessages();
-  const idx = list.findIndex(m => m.id === req.params.id);
-  if (idx === -1) return res.status(404).json({ error: 'not found' });
-  list.splice(idx, 1);
-  saveMessages(list);
+app.delete('/api/messages/:id', async (req, res) => {
+  const doc = await Message.findOneAndDelete({ id: req.params.id });
+  if (!doc) return res.status(404).json({ error: 'not found' });
   res.json({ ok: true });
 });
 
@@ -239,107 +184,70 @@ io.on('connection', (socket) => {
   const ip = socket.handshake.address;
   console.log(`[WS] 设备接入: ${ip}`);
 
-  // 剪贴板：推送更新
-  socket.on('clipboard:push', ({ content }) => {
+  // 剪贴板推送
+  socket.on('clipboard:push', async ({ content }) => {
     if (typeof content !== 'string') return;
-    const data = { content, updatedAt: new Date().toISOString() };
-    writeJSON(CLIPBOARD_FILE, data);
-    // 广播给所有其他设备
+    const data = await Clipboard.setContent(content);
     socket.broadcast.emit('clipboard:update', data);
   });
 
-  // 剪贴板：拉取当前内容
-  socket.on('clipboard:pull', () => {
-    const data = readJSON(CLIPBOARD_FILE, { content: '', updatedAt: null });
+  // 剪贴板拉取
+  socket.on('clipboard:pull', async () => {
+    const data = await Clipboard.getContent();
     socket.emit('clipboard:update', data);
   });
 
-  // 留言板：发送消息
-  socket.on('message:send', ({ author, content }) => {
+  // 留言板发送
+  socket.on('message:send', async ({ author, content }) => {
     if (!author || !content) return;
-    const msg = {
+    await User.ensureExists(author.trim());
+    const msg = await Message.create({
       id: Date.now().toString(36) + Math.random().toString(36).slice(2, 6),
-      author: author.trim(),
-      content: content.trim(),
-      date: new Date().toISOString()
-    };
-    const list = getMessages();
-    list.unshift(msg);
-    if (list.length > 200) list.length = 200;
-    saveMessages(list);
-    // 广播给所有设备（含发送者自己）
+      author: author.trim(), content: content.trim(), date: new Date()
+    });
     io.emit('message:new', msg);
-    io.emit('message:count', list.length);
+    io.emit('message:count', await Message.countDocuments());
   });
 
-  // 留言板：删除消息
-  socket.on('message:delete', ({ id }) => {
-    const list = getMessages();
-    const idx = list.findIndex(m => m.id === id);
-    if (idx === -1) return;
-    list.splice(idx, 1);
-    saveMessages(list);
+  // 留言板删除
+  socket.on('message:delete', async ({ id }) => {
+    await Message.findOneAndDelete({ id });
     io.emit('message:removed', { id });
-    io.emit('message:count', list.length);
+    io.emit('message:count', await Message.countDocuments());
   });
 
-  // 留言板：拉取全部
-  socket.on('messages:get', () => {
-    socket.emit('messages:all', getMessages());
+  // 留言板拉取全部
+  socket.on('messages:get', async () => {
+    socket.emit('messages:all', await Message.find().sort({ date: -1 }).limit(200));
   });
 
-  // ── WebRTC 信令中继 ──────────────────────────────────
+  // ── WebRTC 信令中继 ────────────────────────────────────
   socket.join('p2p-room');
 
-  // 广播全量在线设备列表给房间内所有人
-  const broadcastPeerList = () => {
+  // 广播全量设备列表
+  const pushPeerList = () => {
     io.in('p2p-room').fetchSockets().then(sockets => {
-      const peers = sockets
-        .filter(s => s.id !== socket.id)
-        .map(s => ({ id: s.id, ip: s.handshake.address }));
-      // 发给所有设备（含新加入的）
-      io.in('p2p-room').emit('p2p:peers', peers.map(s => ({
-        id: s.id,
-        ip: s.ip
-      })));
+      sockets.forEach(s => {
+        const peers = sockets.filter(o => o.id !== s.id).map(o => ({ id: o.id, ip: o.handshake.address }));
+        io.to(s.id).emit('p2p:peers', peers);
+      });
     });
   };
-  // 修正：发给每个人的 peers 列表不应包含自己
-  io.in('p2p-room').fetchSockets().then(sockets => {
-    sockets.forEach(s => {
-      const peers = sockets
-        .filter(other => other.id !== s.id)
-        .map(other => ({ id: other.id, ip: other.handshake.address }));
-      // 单独发给这个 socket，不包含自己
-      io.to(s.id).emit('p2p:peers', peers);
-    });
-  });
+  pushPeerList();
 
-  // 信令转发：offer / answer / ICE
   socket.on('p2p:signal', ({ to, type, data }) => {
     io.to(to).emit('p2p:signal', { from: socket.id, type, data });
   });
-
-  // 文件传输请求
   socket.on('p2p:file-request', ({ to, fileInfo }) => {
     io.to(to).emit('p2p:file-request', { from: socket.id, fileInfo });
   });
-
   socket.on('p2p:file-response', ({ to, accepted }) => {
     io.to(to).emit('p2p:file-response', { from: socket.id, accepted });
   });
 
   socket.on('disconnect', () => {
     console.log(`[WS] 设备断开: ${ip}`);
-    // 毫秒级通知所有人更新设备列表
-    io.in('p2p-room').fetchSockets().then(sockets => {
-      sockets.forEach(s => {
-        const peers = sockets
-          .filter(other => other.id !== s.id)
-          .map(other => ({ id: other.id, ip: other.handshake.address }));
-        io.to(s.id).emit('p2p:peers', peers);
-      });
-    });
+    pushPeerList();
   });
 });
 
@@ -348,45 +256,36 @@ app.get('/api/server-info', (_req, res) => {
   res.json({ ips: getLocalIPs(), port: PORT });
 });
 
-// ── 启动 ────────────────────────────────────────────────
 function getLocalIPs() {
   const interfaces = os.networkInterfaces();
   const ips = [];
   for (const name of Object.keys(interfaces)) {
     for (const iface of interfaces[name]) {
       if (iface.family === 'IPv4' && !iface.internal) {
-        const ip = iface.address;
-        // 跳过 APIPA (169.254.x.x)、VMware、WSL 虚拟网卡
-        if (ip.startsWith('169.254.')) continue;
+        if (iface.address.startsWith('169.254.')) continue;
         if (name.includes('VMware') || name.includes('vEthernet')) continue;
-        ips.push({ name, ip });
+        ips.push({ name, ip: iface.address });
       }
     }
   }
-  // Wi-Fi / 以太网排在前面
   ips.sort((a, b) => {
-    const priority = n => {
-      if (n.includes('WLAN') || n.includes('Wi-Fi')) return 0;
-      if (n.includes('以太')) return 1;
-      return 2;
-    };
-    return priority(a.name) - priority(b.name);
+    const p = n => n.includes('WLAN') || n.includes('Wi-Fi') ? 0 : n.includes('以太') ? 1 : 2;
+    return p(a.name) - p(b.name);
   });
   return ips;
 }
 
-server.timeout = 0; // 大文件上传下载不限时
-server.listen(PORT, '0.0.0.0', () => {
-  const ips = getLocalIPs();
-  console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
-  console.log('  局域网共享剪贴板 & 寝室记账看板');
-  console.log(`  本机访问: http://localhost:${PORT}`);
-  ips.forEach(({ name, ip }) => {
-    console.log(`  ${name}:  http://${ip}:${PORT}`);
+// ── 启动 ────────────────────────────────────────────────
+(async () => {
+  await connectDB();
+
+  server.timeout = 0;
+  server.listen(PORT, '0.0.0.0', () => {
+    const ips = getLocalIPs();
+    console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+    console.log('  寝室智控中心 v2.0 — MongoDB 版');
+    console.log(`  本机访问: http://localhost:${PORT}`);
+    ips.forEach(({ name, ip }) => console.log(`  ${name}:  http://${ip}:${PORT}`));
+    console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
   });
-  if (ips.length === 0) {
-    console.log('  ⚠ 未检测到局域网 IP，请检查网络连接');
-  }
-  console.log('  ⚠ 手机无法打开？请在 Windows 防火墙中允许 Node.js 通过 3000 端口');
-  console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
-});
+})();

@@ -14,7 +14,12 @@
 
 ## 快速开始
 
-**前提**：电脑已安装 [Node.js](https://nodejs.org)（LTS 版本即可）
+**前提**：
+
+- 安装 [Node.js](https://nodejs.org)（LTS 版本）
+- 安装 [MongoDB Community Server](https://www.mongodb.com/try/download/community)（默认端口 27017）
+
+MongoDB 安装后会自动以后台服务运行，无需额外配置。
 
 双击 `setup.bat` — 自动装依赖、配防火墙、启动服务。
 
@@ -35,9 +40,37 @@
 
 IP 会变，页面顶部 Banner 实时显示当前地址。新电脑装 Node.js 后双击 `setup.bat`。
 
+## E-R 数据模型
+
+```
+┌──────────┐        ┌──────────────┐
+│   User   │───┐    │  Clipboard   │
+│  _id (PK)│   │    │  _id (固定)  │  单例文档
+│  name    │   │    │  content     │
+│  createdAt│  │    │  updatedAt   │
+└──────────┘   │    └──────────────┘
+               │
+        payer  │    ┌──────────────┐        ┌──────────────┐
+        (FK)   ├───→│   Expense    │        │   Message    │
+               │    │  _id (PK)    │        │  _id (PK)    │
+               │    │  amount      │        │  author (FK) │
+               │    │  category    │        │  content     │
+               │    │  description │        │  date        │
+               └───→│  payer  (FK) │        └──────────────┘
+              author│  date        │
+              (FK)  └──────────────┘
+```
+
+- **User** — 用户表，记账和留言自动 upsert 用户
+- **Clipboard** — 剪贴板单例文档（永远只有一条，upsert 更新）
+- **Expense** — 账单表，`payer` 外键关联 `User.name`
+- **Message** — 留言表，`author` 外键关联 `User.name`
+- **FileMeta** — 文件元数据索引（文件本体存磁盘）
+
 ## 技术栈
 
-- 后端：Express + Socket.io + Multer
+- 后端：Express + Socket.io + Multer + Mongoose
 - 前端：纯 HTML/CSS/JS，暗色赛博朋克主题，Dialog 式交互
-- 存储：JSON 文件（`data/` 目录），零数据库依赖
+- 存储：MongoDB（4 张核心表：User / Clipboard / Expense / Message）
+- 文件：磁盘存储（`data/uploads/`）+ MongoDB 元数据索引
 - 通信：HTTP（记账+文件）+ WebSocket（剪贴板+留言板）+ WebRTC（P2P 文件）
