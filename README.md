@@ -14,16 +14,21 @@
 
 ## 快速开始
 
-**前提**：
+```bash
+# 1. 安装运行环境（一次性）
+winget install OpenJS.NodeJS.LTS          # Node.js
+winget install MongoDB.Server              # MongoDB（自动后台运行）
 
-- 安装 [Node.js](https://nodejs.org)（LTS 版本）
-- 安装 [MongoDB Community Server](https://www.mongodb.com/try/download/community)（默认端口 27017）
+# 2. 克隆项目
+git clone git@github.com:Cc-mug-up/dorm-share.git
+cd dorm-share
 
-MongoDB 安装后会自动以后台服务运行，无需额外配置。
+# 3. 双击 setup.bat
+```
 
-双击 `setup.bat` — 自动装依赖、配防火墙、启动服务。
+`setup.bat` 自动完成：装 npm 依赖 → 配防火墙 → 启动服务。
 
-> 首次运行弹出 UAC 窗口点"是"（配置防火墙）。
+> 首次运行弹出 UAC 窗口点"是"（配置防火墙 3000 端口）。
 
 终端打印局域网地址（如 `http://192.168.0.100:3000`），手机连同一 Wi-Fi 打开即可，或扫页面上的二维码。
 
@@ -38,7 +43,27 @@ MongoDB 安装后会自动以后台服务运行，无需额外配置。
 
 ## 换网 / 换电脑
 
-IP 会变，页面顶部 Banner 实时显示当前地址。新电脑装 Node.js 后双击 `setup.bat`。
+IP 会变，页面顶部 Banner 实时显示当前地址。新电脑装 Node.js + MongoDB 后双击 `setup.bat`。
+
+## 项目结构
+
+```
+dorm-share/
+├── server.js          # Express + Socket.io 主程序
+├── models/            # Mongoose 数据模型
+│   ├── db.js          #   MongoDB 连接
+│   ├── User.js        #   用户表（自动 upsert）
+│   ├── Clipboard.js   #   剪贴板单例
+│   ├── Expense.js     #   账单表
+│   ├── Message.js     #   留言表
+│   └── FileMeta.js    #   文件索引
+├── public/            # 前端（纯 HTML/CSS/JS）
+│   ├── index.html     #   主页面 + 全部 CSS 内联
+│   └── app.js         #   前端逻辑
+├── data/uploads/      # 上传文件目录
+├── setup.bat          # 一键启动脚本
+└── start.bat          # 手动启动（可选）
+```
 
 ## E-R 数据模型
 
