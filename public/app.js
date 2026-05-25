@@ -480,7 +480,6 @@ socket.on('p2p:peers', (peers) => {
     });
   });
 });
-socket.on('p2p:peer-joined', () => {});
 socket.on('p2p:peer-left', ({ id }) => {
   if (selectedPeer === id) { selectedPeer = null; }
   if (peerConns[id]) { peerConns[id].close(); delete peerConns[id]; }

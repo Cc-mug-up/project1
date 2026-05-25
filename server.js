@@ -289,22 +289,31 @@ io.on('connection', (socket) => {
   });
 
   // ── WebRTC 信令中继 ──────────────────────────────────
-  // 在线设备列表
-  const deviceInfo = { id: socket.id, ip, name: null, joined: Date.now() };
   socket.join('p2p-room');
 
-  // 广播在线设备列表给所有人
-  const broadcastPeers = () => {
-    const peers = [];
+  // 广播全量在线设备列表给房间内所有人
+  const broadcastPeerList = () => {
     io.in('p2p-room').fetchSockets().then(sockets => {
-      sockets.forEach(s => {
-        if (s.id !== socket.id) peers.push({ id: s.id, ip: s.handshake.address });
-      });
-      socket.emit('p2p:peers', peers);
+      const peers = sockets
+        .filter(s => s.id !== socket.id)
+        .map(s => ({ id: s.id, ip: s.handshake.address }));
+      // 发给所有设备（含新加入的）
+      io.in('p2p-room').emit('p2p:peers', peers.map(s => ({
+        id: s.id,
+        ip: s.ip
+      })));
     });
   };
-  broadcastPeers();
-  socket.broadcast.emit('p2p:peer-joined', { id: socket.id, ip });
+  // 修正：发给每个人的 peers 列表不应包含自己
+  io.in('p2p-room').fetchSockets().then(sockets => {
+    sockets.forEach(s => {
+      const peers = sockets
+        .filter(other => other.id !== s.id)
+        .map(other => ({ id: other.id, ip: other.handshake.address }));
+      // 单独发给这个 socket，不包含自己
+      io.to(s.id).emit('p2p:peers', peers);
+    });
+  });
 
   // 信令转发：offer / answer / ICE
   socket.on('p2p:signal', ({ to, type, data }) => {
@@ -322,7 +331,15 @@ io.on('connection', (socket) => {
 
   socket.on('disconnect', () => {
     console.log(`[WS] 设备断开: ${ip}`);
-    io.emit('p2p:peer-left', { id: socket.id });
+    // 毫秒级通知所有人更新设备列表
+    io.in('p2p-room').fetchSockets().then(sockets => {
+      sockets.forEach(s => {
+        const peers = sockets
+          .filter(other => other.id !== s.id)
+          .map(other => ({ id: other.id, ip: other.handshake.address }));
+        io.to(s.id).emit('p2p:peers', peers);
+      });
+    });
   });
 });
 
