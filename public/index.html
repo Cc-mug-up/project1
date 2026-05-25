@@ -211,6 +211,10 @@ body::after{content:"";position:fixed;inset:0;pointer-events:none;z-index:9999;
 .p2p-transfer-item .p2p-name{color:var(--text);margin-bottom:3px}
 .p2p-transfer-item .p2p-meta{display:flex;justify-content:space-between;color:var(--text-dim);font-family:var(--font-mono);font-size:.66rem}
 
+/* ── P2P Receive Popup ──────────────────────── */
+.p2p-popup-overlay{position:fixed;inset:0;background:rgba(2,2,10,.85);z-index:200;display:flex;align-items:center;justify-content:center}
+.p2p-popup{background:var(--bg-card);border:2px solid var(--gold);border-radius:var(--radius);padding:20px;max-width:340px;width:90%;box-shadow:0 0 40px rgba(226,168,64,.2)}
+
 /* ── Responsive ──────────────────────────────── */
 @media (max-width:500px){
   .dashboard{grid-template-columns:1fr;max-width:340px}
@@ -283,6 +287,18 @@ body::after{content:"";position:fixed;inset:0;pointer-events:none;z-index:9999;
     <span class="dash-desc">满速上传下载共享</span>
   </div>
 </main>
+
+<!-- ═══ P2P 接收请求弹窗 ═══ -->
+<div class="p2p-popup-overlay" id="p2p-popup" style="display:none">
+  <div class="p2p-popup">
+    <p style="font-size:.85rem;color:var(--text-bright);margin-bottom:4px">⚡ P2P 文件传输请求</p>
+    <p id="p2p-popup-info" style="font-size:.75rem;color:var(--text-dim);margin-bottom:14px"></p>
+    <div style="display:flex;gap:8px">
+      <button class="btn btn-pri" id="p2p-popup-accept" style="flex:1">✓ 接受</button>
+      <button class="btn btn-danger" id="p2p-popup-decline" style="flex:1">✗ 拒绝</button>
+    </div>
+  </div>
+</div>
 
 <!-- ══════════════════════════════════════════════
   DIALOGS

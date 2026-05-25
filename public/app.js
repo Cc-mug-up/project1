@@ -150,11 +150,12 @@ document.getElementById('btn-copy').addEventListener('click', async () => {
 const clipToast = document.getElementById('clip-toast');
 let clipToastTimer;
 
-// 收到其他设备推送 → 弹出 toast
+// 收到其他设备推送 → 弹 toast（仅在对话框未打开时）
 const origShowClipSync = showClipSync;
 showClipSync = function(data) {
   origShowClipSync(data);
-  if (data.updatedAt && data.content) {
+  const isOpen = document.getElementById('dialog-clipboard').classList.contains('open');
+  if (!isOpen && data.updatedAt && data.content) {
     clipToast.classList.add('show');
     clearTimeout(clipToastTimer);
     clipToastTimer = setTimeout(() => clipToast.classList.remove('show'), 5000);
@@ -483,27 +484,31 @@ setInterval(loadFiles, 5000);
 loadFiles();
 
 // ═══════════════════════════════════════════════════════
-//  WebRTC P2P 直传（千兆局域网满速）
+//  WebRTC P2P 直传（请求→接受→连接，双向交互）
 // ═══════════════════════════════════════════════════════
 const p2pPeersEl = document.getElementById('p2p-peers');
 const p2pCountEl = document.getElementById('p2p-peer-count');
 const p2pZone = document.getElementById('p2p-zone');
 const p2pInput = document.getElementById('p2p-input');
 const p2pTransferList = document.getElementById('p2p-transfer-list');
+const p2pPopup = document.getElementById('p2p-popup');
+const p2pPopupInfo = document.getElementById('p2p-popup-info');
+const p2pPopupAccept = document.getElementById('p2p-popup-accept');
+const p2pPopupDecline = document.getElementById('p2p-popup-decline');
 
-const peerConns = {};       // socketId → RTCPeerConnection
-const peerChannels = {};    // socketId → RTCDataChannel
+const peerConns = {};
+const peerChannels = {};
 let selectedPeer = null;
+let pendingRequest = null; // { from, fileInfo } — 等待用户决定的请求
 
 const rtcConfig = { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] };
 
 // ── Peer 发现 ─────────────────────────────────────────
 socket.on('p2p:peers', (peers) => {
-  p2pCountEl.textContent = peers.length > 0 ? `${peers.length} 台设备在线` : '暂无其他设备';
+  p2pCountEl.textContent = peers.length > 0 ? `${peers.length} 台设备在线` : '暂无其他设备（需另一设备打开此页面）';
   p2pPeersEl.innerHTML = peers.map(p =>
-    `<span class="p2p-peer" data-peer="${p.id}">🖥 ${p.id.slice(0,6)}</span>`
+    `<span class="p2p-peer" data-peer="${p.id}">🖥 设备 ${p.id.slice(0,6)}</span>`
   ).join('');
-  // 点击选择目标设备
   p2pPeersEl.querySelectorAll('.p2p-peer').forEach(el => {
     el.addEventListener('click', () => {
       p2pPeersEl.querySelectorAll('.p2p-peer').forEach(e => e.classList.remove('selected'));
@@ -519,47 +524,80 @@ socket.on('p2p:peer-left', ({ id }) => {
   if (peerChannels[id]) delete peerChannels[id];
 });
 
-// ── 选择文件 + 目标 → 发起 P2P 传输 ──────────────────
+// ── 选择文件 + 目标 → 发送请求（不直接连） ──────────────
 p2pZone.addEventListener('click', () => p2pInput.click());
 p2pZone.addEventListener('dragover', (e) => { e.preventDefault(); p2pZone.classList.add('dragover'); });
 p2pZone.addEventListener('dragleave', () => p2pZone.classList.remove('dragover'));
 p2pZone.addEventListener('drop', (e) => {
   e.preventDefault(); p2pZone.classList.remove('dragover');
-  if (e.dataTransfer.files.length) sendP2PFile(e.dataTransfer.files[0]);
+  if (e.dataTransfer.files.length) requestP2PTransfer(e.dataTransfer.files[0]);
 });
 p2pInput.addEventListener('change', () => {
-  if (p2pInput.files.length) sendP2PFile(p2pInput.files[0]);
+  if (p2pInput.files.length) requestP2PTransfer(p2pInput.files[0]);
 });
 
-function sendP2PFile(file) {
-  if (!selectedPeer) { alert('请先选择一个目标设备'); return; }
-  const peerId = selectedPeer;
-
-  // 显示传输项
+function requestP2PTransfer(file) {
+  if (!selectedPeer) { alert('请先在设备列表中点击选择一个目标设备'); return; }
+  socket.emit('p2p:file-request', { to: selectedPeer, fileInfo: { name: file.name, size: file.size, type: file.type } });
+  // 显示等待状态
   const itemId = 'p2p-' + Date.now();
   p2pTransferList.insertAdjacentHTML('afterbegin', `
     <div class="p2p-transfer-item" id="${itemId}">
-      <div class="p2p-name">⚡ ${escHtml(file.name)} → ${peerId.slice(0,6)}</div>
-      <div class="p2p-meta">
-        <span>${formatSize(file.size)} · 等待连接…</span>
-        <span class="p2p-status">连接中</span>
-      </div>
-      <div class="dl-bar-wrap"><div class="dl-bar" style="width:0%;background:var(--gold)"></div></div>
+      <div class="p2p-name">⚡ ${escHtml(file.name)} → ${selectedPeer.slice(0,6)}</div>
+      <div class="p2p-meta"><span>${formatSize(file.size)} · 等待对方接受…</span></div>
     </div>`);
+  // 暂存文件引用，等对方接受后开始传
+  p2pInput._pendingFile = file;
+  p2pInput._pendingItemId = itemId;
+  p2pInput.value = '';
+}
 
+// ── 接收方：收到文件传输请求 → 弹出通知 ────────────────
+socket.on('p2p:file-request', ({ from, fileInfo }) => {
+  pendingRequest = { from, fileInfo };
+  p2pPopupInfo.textContent = `设备 ${from.slice(0,6)} 想发送：${fileInfo.name}（${formatSize(fileInfo.size)}）`;
+  p2pPopup.style.display = 'flex';
+});
+
+p2pPopupAccept.addEventListener('click', () => {
+  if (!pendingRequest) return;
+  p2pPopup.style.display = 'none';
+  socket.emit('p2p:file-response', { to: pendingRequest.from, accepted: true });
+  pendingRequest = null;
+});
+
+p2pPopupDecline.addEventListener('click', () => {
+  if (!pendingRequest) return;
+  p2pPopup.style.display = 'none';
+  socket.emit('p2p:file-response', { to: pendingRequest.from, accepted: false });
+  pendingRequest = null;
+});
+
+// ── 发送方：对方接受了 → 开始 WebRTC 传输 ──────────────
+socket.on('p2p:file-response', ({ from, accepted }) => {
+  if (!accepted) {
+    alert('对方拒绝了文件传输');
+    return;
+  }
+  const file = p2pInput._pendingFile;
+  const itemId = p2pInput._pendingItemId;
+  if (!file) return;
+  startP2PSend(from, file, itemId);
+});
+
+function startP2PSend(toPeer, file, itemId) {
   const pc = new RTCPeerConnection(rtcConfig);
-  peerConns[peerId] = pc;
+  peerConns[toPeer] = pc;
   const channel = pc.createDataChannel('file', { ordered: true });
-  peerChannels[peerId] = channel;
+  peerChannels[toPeer] = channel;
   channel.binaryType = 'arraybuffer';
 
+  const CHUNK = 16384;
   let offset = 0;
-  const CHUNK = 16384; // 16KB chunks
   const startTime = Date.now();
 
   channel.onopen = () => {
-    const meta = JSON.stringify({ name: file.name, size: file.size, type: file.type });
-    channel.send(meta);
+    channel.send(JSON.stringify({ name: file.name, size: file.size, type: file.type }));
     readNext();
   };
 
@@ -568,35 +606,34 @@ function sendP2PFile(file) {
     const slice = file.slice(offset, offset + CHUNK);
     const reader = new FileReader();
     reader.onload = () => { channel.send(reader.result); offset += CHUNK; readNext(); };
-    reader.onerror = () => console.error('read error');
     reader.readAsArrayBuffer(slice);
-    // 更新进度
     const pct = Math.round(offset / file.size * 100);
     const speed = (Date.now() - startTime) > 0 ? offset / ((Date.now() - startTime) / 1000) : 0;
-    const bar = document.querySelector(`#${itemId} .dl-bar`);
-    const statusEl = document.querySelector(`#${itemId} .p2p-status`);
-    const metaEl = document.querySelector(`#${itemId} .p2p-meta span`);
-    if (bar) bar.style.width = pct + '%';
-    if (statusEl) statusEl.textContent = pct + '%';
-    if (metaEl) metaEl.textContent = formatSize(file.size) + ' · ' + formatSize(speed) + '/s';
+    const el = document.querySelector(`#${itemId}`);
+    if (el) {
+      el.innerHTML = `<div class="p2p-name">⚡ ${escHtml(file.name)} → ${toPeer.slice(0,6)}</div>
+        <div class="p2p-meta"><span>${formatSize(file.size)} · ${formatSize(speed)}/s</span><span>${pct}%</span></div>
+        <div class="dl-bar-wrap"><div class="dl-bar" style="width:${pct}%;background:var(--gold)"></div></div>`;
+    }
   }
 
   channel.onclose = () => {
-    const statusEl = document.querySelector(`#${itemId} .p2p-status`);
-    if (statusEl) statusEl.textContent = '完成 ✓';
+    const el = document.querySelector(`#${itemId} .p2p-meta span:last-child`);
+    if (el) el.textContent = '完成 ✓';
   };
 
   pc.onicecandidate = (e) => {
-    if (e.candidate) socket.emit('p2p:signal', { to: peerId, type: 'ice', data: e.candidate });
+    if (e.candidate) socket.emit('p2p:signal', { to: toPeer, type: 'ice', data: e.candidate });
   };
   pc.createOffer().then(offer => pc.setLocalDescription(offer)).then(() => {
-    socket.emit('p2p:signal', { to: peerId, type: 'offer', data: pc.localDescription });
+    socket.emit('p2p:signal', { to: toPeer, type: 'offer', data: pc.localDescription });
   });
 
-  p2pInput.value = '';
+  p2pInput._pendingFile = null;
+  p2pInput._pendingItemId = null;
 }
 
-// ── 接收端：处理 WebRTC 连接 ──────────────────────────
+// ── 接收方：处理 WebRTC 连接 + 接收文件数据 ────────────
 socket.on('p2p:signal', async ({ from, type, data }) => {
   if (type === 'offer') {
     const pc = new RTCPeerConnection(rtcConfig);
@@ -607,27 +644,26 @@ socket.on('p2p:signal', async ({ from, type, data }) => {
 
     let receivedMeta = null, receivedChunks = [], receivedSize = 0;
     const startTime = Date.now();
+    let itemId = null;
 
     pc.ondatachannel = (e) => {
       const channel = e.channel;
       channel.binaryType = 'arraybuffer';
       peerChannels[from] = channel;
 
-      const itemId = 'p2p-recv-' + Date.now();
+      itemId = 'p2p-recv-' + Date.now();
       p2pTransferList.insertAdjacentHTML('afterbegin', `
         <div class="p2p-transfer-item" id="${itemId}">
           <div class="p2p-name">⬇ 接收中…</div>
-          <div class="p2p-meta">
-            <span>等待数据…</span>
-            <span class="p2p-status">0%</span>
-          </div>
+          <div class="p2p-meta"><span>等待数据…</span><span class="p2p-status">0%</span></div>
           <div class="dl-bar-wrap"><div class="dl-bar" style="width:0%;background:var(--neon)"></div></div>
         </div>`);
 
       channel.onmessage = (ev) => {
         if (typeof ev.data === 'string') {
           receivedMeta = JSON.parse(ev.data);
-          document.querySelector(`#${itemId} .p2p-name`).textContent = '⬇ ' + receivedMeta.name;
+          const nameEl = document.querySelector(`#${itemId} .p2p-name`);
+          if (nameEl) nameEl.textContent = '⬇ ' + receivedMeta.name;
           return;
         }
         receivedChunks.push(ev.data);
@@ -645,16 +681,15 @@ socket.on('p2p:signal', async ({ from, type, data }) => {
       };
 
       channel.onclose = () => {
-        if (receivedMeta) {
-          const blob = new Blob(receivedChunks, { type: receivedMeta.type || 'application/octet-stream' });
-          const url = URL.createObjectURL(blob);
-          const a = document.createElement('a');
-          a.href = url; a.download = receivedMeta.name;
-          document.body.appendChild(a); a.click(); document.body.removeChild(a);
-          URL.revokeObjectURL(url);
-          const statusEl = document.querySelector(`#${itemId} .p2p-status`);
-          if (statusEl) statusEl.textContent = '完成 ✓';
-        }
+        if (!receivedMeta) return;
+        const blob = new Blob(receivedChunks, { type: receivedMeta.type || 'application/octet-stream' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url; a.download = receivedMeta.name;
+        document.body.appendChild(a); a.click(); document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+        const statusEl = document.querySelector(`#${itemId} .p2p-status`);
+        if (statusEl) statusEl.textContent = '完成 ✓';
       };
     };
 
