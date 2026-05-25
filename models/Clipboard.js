@@ -16,7 +16,7 @@ clipboardSchema.statics.setContent = async function(content) {
   return this.findOneAndUpdate(
     { _id: 'singleton' },
     { content, updatedAt: new Date() },
-    { upsert: true, new: true }
+    { upsert: true, returnDocument: 'after' }
   );
 };
 

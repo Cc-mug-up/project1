@@ -11,7 +11,7 @@ userSchema.statics.ensureExists = async function(name) {
   return this.findOneAndUpdate(
     { name },
     { $setOnInsert: { name, createdAt: new Date() } },
-    { upsert: true, new: true }
+    { upsert: true, returnDocument: 'after' }
   );
 };
 

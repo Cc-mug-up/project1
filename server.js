@@ -73,7 +73,7 @@ app.post('/api/files/upload', (req, res, next) => {
   const entry = await FileMeta.findOneAndUpdate(
     { name: req.file.filename },
     { name: req.file.filename, size: req.file.size, date: new Date(), type: req.file.mimetype },
-    { upsert: true, new: true }
+    { upsert: true, returnDocument: 'after' }
   );
   res.json(entry);
 });
@@ -110,15 +110,19 @@ app.get('/api/expenses', async (_req, res) => {
 });
 
 app.post('/api/expenses', async (req, res) => {
-  const { amount, category, description, payer } = req.body;
-  if (!amount || !payer) return res.status(400).json({ error: 'amount and payer required' });
-  await User.ensureExists(payer.trim());
-  const expense = await Expense.create({
-    id: Date.now().toString(36) + Math.random().toString(36).slice(2, 6),
-    amount: parseFloat(amount), category: category || '其他',
-    description: description || '', payer: payer.trim(), date: new Date()
-  });
-  res.json(expense);
+  try {
+    const { amount, category, description, payer } = req.body;
+    if (!amount || !payer) return res.status(400).json({ error: 'amount and payer required' });
+    await User.ensureExists(payer.trim());
+    const expense = await Expense.create({
+      id: Date.now().toString(36) + Math.random().toString(36).slice(2, 6),
+      amount: parseFloat(amount), category: category || '其他',
+      description: description || '', payer: payer.trim(), date: new Date()
+    });
+    res.json(expense);
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
 });
 
 app.delete('/api/expenses/:id', async (req, res) => {
@@ -163,14 +167,18 @@ app.get('/api/messages', async (_req, res) => {
 });
 
 app.post('/api/messages', async (req, res) => {
-  const { author, content } = req.body;
-  if (!author || !content) return res.status(400).json({ error: 'author and content required' });
-  await User.ensureExists(author.trim());
-  const msg = await Message.create({
-    id: Date.now().toString(36) + Math.random().toString(36).slice(2, 6),
-    author: author.trim(), content: content.trim(), date: new Date()
-  });
-  res.json(msg);
+  try {
+    const { author, content } = req.body;
+    if (!author || !content) return res.status(400).json({ error: 'author and content required' });
+    await User.ensureExists(author.trim());
+    const msg = await Message.create({
+      id: Date.now().toString(36) + Math.random().toString(36).slice(2, 6),
+      author: author.trim(), content: content.trim(), date: new Date()
+    });
+    res.json(msg);
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
 });
 
 app.delete('/api/messages/:id', async (req, res) => {
